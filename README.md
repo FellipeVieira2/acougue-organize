@@ -30,3 +30,18 @@ Monorepo TypeScript; Next.js/React para as aplicações web; NestJS para API mod
 ## Contribuição
 
 As mudanças devem preservar o modelo SaaS e incluir validação proporcional ao risco. Nunca adicionar dados reais, credenciais, certificados fiscais ou tokens ao repositório. Integrações reais dependem de configuração, capacidades e homologação do respectivo provedor. Nenhum preço comercial de exemplo é uma oferta aprovada.
+
+## Executar a fundação
+
+Requisitos: Node.js 24.12+ da linha 24 e pnpm 11.19.0.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+O núcleo TypeScript usa execução nativa no Node para testes, e compilação/verificação separada pelo TypeScript. [Referência do Node](https://nodejs.org/api/typescript.html). O build atual emite somente a biblioteca de domínio; ainda não inicia API ou interface.
+
+Os testes de banco exigem PostgreSQL 17 efêmero e `DATABASE_TEST_URL`; veja [database/README.md](database/README.md). O workflow executa ambos os grupos. Não conectar testes a dados reais.
