@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { parseCreatePriceRequest, type CreatePriceRequest } from "./api.ts";
 import { createTenantTransaction } from "./database.ts";
 import { getMembership, requirePermission, type MembershipRole } from "./membership.ts";
 
@@ -158,14 +159,13 @@ export async function updateProductNameAuthorized(
 
 export async function appendProductPrice(
   client: PoolClient,
-  input: { id: string; organizationId: string; storeId: string; productId: string; channel: string; amountMinor: number; currency: string; revision: number },
+  input: CreatePriceRequest,
 ): Promise<void> {
+  input = parseCreatePriceRequest(input);
   requireUuid(input.id, "id");
   requireUuid(input.organizationId, "organizationId");
   requireUuid(input.storeId, "storeId");
   requireUuid(input.productId, "productId");
-  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < 0) throw new Error("amountMinor must be a non-negative integer");
-  if (!Number.isSafeInteger(input.revision) || input.revision < 1) throw new Error("revision must be positive");
   await client.query(
     `INSERT INTO app.product_price
       (id, organization_id, store_id, product_id, channel, amount_minor, currency, revision)

@@ -55,6 +55,11 @@ export async function createOrganizationWithStore(
       [input.storeId, input.organizationId, storeName, storeSlug],
     );
     await client.query(
+      `INSERT INTO app.organization_membership (organization_id, actor_id, role, status)
+       VALUES ($1, $2, 'OWNER', 'ACTIVE')`,
+      [input.organizationId, input.actorId],
+    );
+    await client.query(
       `INSERT INTO app.audit_log
         (id, organization_id, actor_id, action, entity_id, reason, correlation_id)
        VALUES ($1, $2, $3, 'organization.created', $2, $4, $5)`,
