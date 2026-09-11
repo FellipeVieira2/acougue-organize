@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { createTenantTransaction } from "./database.ts";
+import { getMembership, requirePermission, type MembershipRole } from "./membership.ts";
 
 export type CatalogProductInput = {
   id: string;
@@ -21,6 +22,16 @@ function requireUuid(value: string, field: string): void {
   if (!/^[0-9a-f-]{36}$/i.test(value)) throw new Error(`${field} must be a UUID`);
 }
 
+async function requireCatalogPermission(
+  pool: Pool,
+  organizationId: string,
+  actorId: string,
+  role: MembershipRole,
+): Promise<void> {
+  const membership = await getMembership(pool, organizationId, actorId);
+  requirePermission(membership, role);
+}
+
 export async function createStore(pool: Pool, input: CatalogStoreInput): Promise<void> {
   requireUuid(input.id, "id");
   requireUuid(input.organizationId, "organizationId");
@@ -33,6 +44,16 @@ export async function createStore(pool: Pool, input: CatalogStoreInput): Promise
   });
 }
 
+export async function createStoreAuthorized(
+  pool: Pool,
+  actorId: string,
+  input: CatalogStoreInput,
+): Promise<void> {
+  requireUuid(actorId, "actorId");
+  await requireCatalogPermission(pool, input.organizationId, actorId, "ADMIN");
+  return createStore(pool, input);
+}
+
 export async function listStores(pool: Pool, organizationId: string): Promise<unknown[]> {
   requireUuid(organizationId, "organizationId");
   const transaction = createTenantTransaction(pool);
@@ -42,6 +63,16 @@ export async function listStores(pool: Pool, organizationId: string): Promise<un
     );
     return result.rows;
   });
+}
+
+export async function listStoresAuthorized(
+  pool: Pool,
+  organizationId: string,
+  actorId: string,
+): Promise<unknown[]> {
+  requireUuid(actorId, "actorId");
+  await requireCatalogPermission(pool, organizationId, actorId, "VIEWER");
+  return listStores(pool, organizationId);
 }
 
 export async function createProduct(pool: Pool, input: CatalogProductInput): Promise<void> {
@@ -59,6 +90,16 @@ export async function createProduct(pool: Pool, input: CatalogProductInput): Pro
   });
 }
 
+export async function createProductAuthorized(
+  pool: Pool,
+  actorId: string,
+  input: CatalogProductInput,
+): Promise<void> {
+  requireUuid(actorId, "actorId");
+  await requireCatalogPermission(pool, input.organizationId, actorId, "MANAGER");
+  return createProduct(pool, input);
+}
+
 export async function listProducts(pool: Pool, organizationId: string): Promise<unknown[]> {
   requireUuid(organizationId, "organizationId");
   const transaction = createTenantTransaction(pool);
@@ -69,6 +110,16 @@ export async function listProducts(pool: Pool, organizationId: string): Promise<
     );
     return result.rows;
   });
+}
+
+export async function listProductsAuthorized(
+  pool: Pool,
+  organizationId: string,
+  actorId: string,
+): Promise<unknown[]> {
+  requireUuid(actorId, "actorId");
+  await requireCatalogPermission(pool, organizationId, actorId, "VIEWER");
+  return listProducts(pool, organizationId);
 }
 
 export async function updateProductName(
@@ -92,6 +143,19 @@ export async function updateProductName(
   });
 }
 
+export async function updateProductNameAuthorized(
+  pool: Pool,
+  actorId: string,
+  organizationId: string,
+  productId: string,
+  name: string,
+  expectedVersion: number,
+): Promise<boolean> {
+  requireUuid(actorId, "actorId");
+  await requireCatalogPermission(pool, organizationId, actorId, "OPERATOR");
+  return updateProductName(pool, organizationId, productId, name, expectedVersion);
+}
+
 export async function appendProductPrice(
   client: PoolClient,
   input: { id: string; organizationId: string; storeId: string; productId: string; channel: string; amountMinor: number; currency: string; revision: number },
@@ -108,4 +172,70 @@ export async function appendProductPrice(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [input.id, input.organizationId, input.storeId, input.productId, input.channel, input.amountMinor, input.currency, input.revision],
   );
+}
+
+export async function appendProductPriceAuthorized(
+  pool: Pool,
+  actorId: string,
+  input: Parameters<typeof appendProductPrice>[1],
+): Promise<void> {
+  requireUuid(actorId, "actorId");
+  await requireCatalogPermission(pool, input.organizationId, actorId, "MANAGER");
+  const transaction = createTenantTransaction(pool);
+  await transaction(input.organizationId, (client) => appendProductPrice(client, input));
+}
+
+export { requireCatalogPermission };
+
+export type { MembershipRole } from "./membership.ts";
+
+export async function createStoreWithPermission(
+  pool: Pool,
+  actorId: string,
+  input: CatalogStoreInput,
+): Promise<void> {
+  return createStoreAuthorized(pool, actorId, input);
+}
+
+export async function createProductWithPermission(
+  pool: Pool,
+  actorId: string,
+  input: CatalogProductInput,
+): Promise<void> {
+  return createProductAuthorized(pool, actorId, input);
+}
+
+export async function listStoresWithPermission(
+  pool: Pool,
+  organizationId: string,
+  actorId: string,
+): Promise<unknown[]> {
+  return listStoresAuthorized(pool, organizationId, actorId);
+}
+
+export async function listProductsWithPermission(
+  pool: Pool,
+  organizationId: string,
+  actorId: string,
+): Promise<unknown[]> {
+  return listProductsAuthorized(pool, organizationId, actorId);
+}
+
+export async function updateProductNameWithPermission(
+  pool: Pool,
+  actorId: string,
+  organizationId: string,
+  productId: string,
+  name: string,
+  expectedVersion: number,
+): Promise<boolean> {
+  return updateProductNameAuthorized(pool, actorId, organizationId, productId, name, expectedVersion);
+}
+
+export async function appendProductPriceWithPermission(
+  pool: Pool,
+  actorId: string,
+  input: Parameters<typeof appendProductPrice>[1],
+): Promise<void> {
+  return appendProductPriceAuthorized(pool, actorId, input);
 }
