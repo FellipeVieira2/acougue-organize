@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { applyMigrations } from '../src/migrations.ts';
+import { createOrganizationWithStore } from '../src/onboarding.ts';
+import { getMembership } from '../src/membership.ts';
+import { appendProductPriceAuthorized, createProductAuthorized } from '../src/catalog.ts';
 
 const url = process.env.DATABASE_TEST_URL;
 if (!url) throw new Error('DATABASE_TEST_URL é obrigatória; testes de banco não podem ser ignorados.');
@@ -33,7 +37,14 @@ async function inTenant<T>(tenant: string | null, operation: (client: pg.PoolCli
 before(async () => {
   const existing = await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'");
   assert.equal(existing.rowCount, 0, 'A suíte exige banco vazio e não remove dados existentes.');
-  await pool.query(await readFile(new URL('../../../database/migrations/0001_tenant_foundation.sql', import.meta.url), 'utf8'));
+  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql'].map(async name => ({
+    name, sql: await readFile(new URL(`../../../database/migrations/${name}`, import.meta.url), 'utf8'),
+  })));
+  await assert.rejects(applyMigrations(pool, [...migrations, { name: '9999_failure.sql', sql: 'SELECT missing_migration_function()' }]));
+  assert.equal((await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'")).rowCount, 0, 'Falha deve desfazer toda a instalação');
+  await Promise.all([applyMigrations(pool, migrations), applyMigrations(pool, migrations)]);
+  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 3);
+  await assert.rejects(applyMigrations(pool, [{ ...migrations[0]!, sql: migrations[0]!.sql + '\n-- changed' }]), /checksum mismatch/);
   for (const [tenant, store, product] of [[tenantA, storeA, productA], [tenantB, storeB, productB]] as const) {
     await inTenant(tenant, async client => {
       await client.query("INSERT INTO app.organization(id,name,status) VALUES ($1,'Açougue de teste','ACTIVE')", [tenant]);
@@ -49,7 +60,7 @@ test('runtime não tem superuser, ownership ou bypass RLS', async () => {
   const roles = await pool.query("SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles WHERE rolname='acougue_runtime'");
   assert.deepEqual(roles.rows[0], { rolsuper: false, rolbypassrls: false, rolcanlogin: false });
   const tables = await pool.query("SELECT relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner) AS owner FROM pg_class JOIN pg_namespace n ON n.oid=relnamespace WHERE n.nspname='app' AND relkind='r'");
-  assert.equal(tables.rowCount, 5);
+  assert.equal(tables.rowCount, 6);
   for (const row of tables.rows) {
     assert.equal(row.relrowsecurity, true);
     assert.equal(row.relforcerowsecurity, true);
@@ -116,4 +127,31 @@ test('auditoria é append-only para a role de aplicação', async () => {
       (error: unknown) => error instanceof pg.DatabaseError && error.code === '42501');
   }
   await inTenant(tenantB, async client => { assert.equal((await client.query('SELECT * FROM app.audit_log')).rowCount, 0); });
+});
+
+test('onboarding cria proprietário ativo e permite catálogo com precisão bigint', async () => {
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const storeId = randomUUID();
+  const productId = randomUUID();
+  await createOrganizationWithStore(pool, { organizationId, actorId, storeId, auditId: randomUUID(), correlationId: randomUUID(), name: 'Nova empresa', storeName: 'Matriz', storeSlug: `loja-${storeId}` });
+  assert.deepEqual(await getMembership(pool, organizationId, actorId), { organizationId, actorId, role: 'OWNER', status: 'ACTIVE' });
+  await createProductAuthorized(pool, actorId, { id: productId, organizationId, sku: 'N001', name: 'Produto', stockUnit: 'UNIT', saleStrategy: 'UNIT' });
+  await appendProductPriceAuthorized(pool, actorId, { id: randomUUID(), organizationId, storeId, productId, channel: 'POS', amountMinor: '9007199254740993', currency: 'BRL', revision: '1' });
+  await inTenant(organizationId, async client => {
+    assert.equal((await client.query('SELECT amount_minor FROM app.product_price')).rows[0].amount_minor, '9007199254740993');
+  });
+  await assert.rejects(createProductAuthorized(pool, randomUUID(), { id: randomUUID(), organizationId, sku: 'N002', name: 'Negado', stockUnit: 'UNIT', saleStrategy: 'UNIT' }), /FORBIDDEN/);
+});
+
+test('onboarding com slug ocupado não deixa empresa ou proprietário parcial', async () => {
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  await assert.rejects(createOrganizationWithStore(pool, { organizationId, actorId, storeId: randomUUID(), auditId: randomUUID(), correlationId: randomUUID(), name: 'Falha', storeName: 'Matriz', storeSlug: `teste-${storeA}` }),
+    (error: unknown) => error instanceof pg.DatabaseError && error.code === '23505');
+  assert.equal(await getMembership(pool, organizationId, actorId), null);
+  await inTenant(organizationId, async client => {
+    assert.equal((await client.query('SELECT id FROM app.organization')).rowCount, 0);
+    assert.equal((await client.query('SELECT id FROM app.audit_log')).rowCount, 0);
+  });
 });
