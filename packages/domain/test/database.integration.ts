@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { applyMigrations } from '../src/migrations.ts';
 import { createOrganizationWithStore } from '../src/onboarding.ts';
-import { getMembership } from '../src/membership.ts';
+import { addMembership, getMembership, withMembershipTransaction } from '../src/membership.ts';
 import { appendProductPriceAuthorized, createProductAuthorized } from '../src/catalog.ts';
 
 const url = process.env.DATABASE_TEST_URL;
@@ -154,4 +154,37 @@ test('onboarding com slug ocupado não deixa empresa ou proprietário parcial', 
     assert.equal((await client.query('SELECT id FROM app.organization')).rowCount, 0);
     assert.equal((await client.query('SELECT id FROM app.audit_log')).rowCount, 0);
   });
+});
+
+test('membros exigem administrador, impedem elevação de privilégio e auditam o autor', async () => {
+  const organizationId = randomUUID(), owner = randomUUID(), admin = randomUUID(), viewer = randomUUID();
+  await createOrganizationWithStore(pool, { organizationId, actorId: owner, storeId: randomUUID(), auditId: randomUUID(), correlationId: randomUUID(), name: 'Permissões', storeName: 'Matriz', storeSlug: `permissoes-${organizationId}` });
+  await addMembership(pool, owner, { organizationId, actorId: admin, role: 'ADMIN', status: 'ACTIVE' }, randomUUID(), randomUUID());
+  await addMembership(pool, admin, { organizationId, actorId: viewer, role: 'VIEWER', status: 'ACTIVE' }, randomUUID(), randomUUID());
+  for (const requester of [viewer, randomUUID()]) {
+    await assert.rejects(addMembership(pool, requester, { organizationId, actorId: randomUUID(), role: 'VIEWER', status: 'ACTIVE' }, randomUUID(), randomUUID()), /FORBIDDEN/);
+  }
+  for (const role of ['OWNER', 'ADMIN'] as const) {
+    await assert.rejects(addMembership(pool, admin, { organizationId, actorId: randomUUID(), role, status: 'ACTIVE' }, randomUUID(), randomUUID()), /FORBIDDEN/);
+  }
+  await inTenant(organizationId, async client => {
+    const audit = await client.query("SELECT actor_id FROM app.audit_log WHERE action='membership.created' AND entity_id=$1", [viewer]);
+    assert.equal(audit.rows[0].actor_id, admin);
+  });
+  await assert.rejects(createProductAuthorized(pool, viewer, { id: randomUUID(), organizationId, sku: 'NEG', name: 'Negado', stockUnit: 'UNIT', saleStrategy: 'UNIT' }), /FORBIDDEN/);
+});
+
+test('permissão fica protegida contra revogação concorrente até finalizar a operação', async () => {
+  const organizationId = randomUUID(), actorId = randomUUID();
+  await createOrganizationWithStore(pool, { organizationId, actorId, storeId: randomUUID(), auditId: randomUUID(), correlationId: randomUUID(), name: 'Concorrência', storeName: 'Matriz', storeSlug: `lock-${organizationId}` });
+  await withMembershipTransaction(pool, organizationId, actorId, 'MANAGER', async () => {
+    await assert.rejects(inTenant(organizationId, async client => {
+      await client.query("SET LOCAL lock_timeout = '100ms'");
+      await client.query("UPDATE app.organization_membership SET status='REVOKED' WHERE actor_id=$1", [actorId]);
+    }), (error: unknown) => error instanceof pg.DatabaseError && error.code === '55P03');
+  });
+  await inTenant(organizationId, async client => {
+    await client.query("UPDATE app.organization_membership SET status='REVOKED' WHERE actor_id=$1", [actorId]);
+  });
+  await assert.rejects(withMembershipTransaction(pool, organizationId, actorId, 'VIEWER', async () => undefined), /FORBIDDEN/);
 });
