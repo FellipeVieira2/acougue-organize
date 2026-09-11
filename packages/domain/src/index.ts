@@ -6,3 +6,4 @@ export * from './database.ts';
 export * from './catalog.ts';
 export * from './onboarding.ts';
 export * from './membership.ts';
+export * from './api.ts';
