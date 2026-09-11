@@ -12,7 +12,7 @@ Atualizado em 2026-09-10.
 | Núcleo de regras TypeScript | Implementado e validado localmente | packages/domain/src; 17 testes unitários passaram, typecheck e build passaram |
 | Fundação PostgreSQL | Schema aplicado e runtime inicial implementado | Neon: schema `app`, RLS, role `acougue_runtime` e ledger `public.schema_migrations` aplicados; `packages/domain/src/database.ts` e `migrations.ts` adicionados |
 | CI | Workflow preparado | .github/workflows/ci.yml; aguarda execução remota |
-| API, autenticação e interfaces | Pendente | Sem jornada operacional executável ainda |
+| API, autenticação e interfaces | Em andamento | Autorização por membership implementada no domínio; autenticação e rotas ainda pendentes |
 | Produção/homologação | Pendente | Não liberado para operação real |
 
 Especificações são o projeto de implementação. Rotas, tabelas e módulos descritos não devem ser anunciados como já funcionais. O plano completo permanece aberto até haver evidência por requisito.
