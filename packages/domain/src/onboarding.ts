@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { createTenantTransaction } from "./database.ts";
 
 export type CreateOrganizationInput = {
@@ -30,6 +30,11 @@ export async function createOrganizationWithStore(
   pool: Pool,
   input: CreateOrganizationInput,
 ): Promise<void> {
+  await createTenantTransaction(pool)(input.organizationId, client => createOrganizationInTransaction(client, input));
+}
+
+/** Internal registration composition; caller owns the tenant transaction. */
+export async function createOrganizationInTransaction(client: PoolClient, input: CreateOrganizationInput): Promise<void> {
   requireUuid(input.organizationId, "organizationId");
   requireUuid(input.storeId, "storeId");
   requireUuid(input.actorId, "actorId");
@@ -42,8 +47,6 @@ export async function createOrganizationWithStore(
     throw new Error("storeSlug must be a lowercase slug");
   }
 
-  const transaction = createTenantTransaction(pool);
-  await transaction(input.organizationId, async (client) => {
     await client.query(
       `INSERT INTO app.organization (id, name, status)
        VALUES ($1, $2, 'ACTIVE')`,
@@ -65,5 +68,4 @@ export async function createOrganizationWithStore(
        VALUES ($1, $2, $3, 'organization.created', $2, $4, $5)`,
       [input.auditId, input.organizationId, input.actorId, "Initial organization onboarding", input.correlationId],
     );
-  });
 }

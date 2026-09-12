@@ -96,8 +96,9 @@ export async function withMembershipTransaction<T>(
   requireUuid(actorId, "actorId");
   return createTenantTransaction(pool)(organizationId, async client => {
     const result = await client.query<Membership>(
-      `SELECT organization_id AS "organizationId", actor_id AS "actorId", role, status
-       FROM app.organization_membership WHERE organization_id = $1 AND actor_id = $2 FOR SHARE`,
+      `SELECT m.organization_id AS "organizationId", m.actor_id AS "actorId", m.role, m.status
+       FROM app.organization_membership m JOIN app.organization o ON o.id=m.organization_id
+       WHERE m.organization_id = $1 AND m.actor_id = $2 AND o.status='ACTIVE' FOR SHARE OF m,o`,
       [organizationId, actorId],
     );
     const membership = requirePermission(result.rows[0] ?? null, requiredRole);
