@@ -7,6 +7,7 @@ import { applyMigrations } from '../src/migrations.ts';
 import { createOrganizationWithStore } from '../src/onboarding.ts';
 import { addMembership, getMembership, withMembershipTransaction } from '../src/membership.ts';
 import { appendProductPriceAuthorized, createProductAuthorized } from '../src/catalog.ts';
+import { digest, login, logout, register, session } from '../../../lib/auth.ts';
 
 const url = process.env.DATABASE_TEST_URL;
 if (!url) throw new Error('DATABASE_TEST_URL é obrigatória; testes de banco não podem ser ignorados.');
@@ -37,13 +38,13 @@ async function inTenant<T>(tenant: string | null, operation: (client: pg.PoolCli
 before(async () => {
   const existing = await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'");
   assert.equal(existing.rowCount, 0, 'A suíte exige banco vazio e não remove dados existentes.');
-  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql'].map(async name => ({
+  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql', '0004_web_identity.sql'].map(async name => ({
     name, sql: await readFile(new URL(`../../../database/migrations/${name}`, import.meta.url), 'utf8'),
   })));
   await assert.rejects(applyMigrations(pool, [...migrations, { name: '9999_failure.sql', sql: 'SELECT missing_migration_function()' }]));
   assert.equal((await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'")).rowCount, 0, 'Falha deve desfazer toda a instalação');
   await Promise.all([applyMigrations(pool, migrations), applyMigrations(pool, migrations)]);
-  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 3);
+  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 4);
   await assert.rejects(applyMigrations(pool, [{ ...migrations[0]!, sql: migrations[0]!.sql + '\n-- changed' }]), /checksum mismatch/);
   for (const [tenant, store, product] of [[tenantA, storeA, productA], [tenantB, storeB, productB]] as const) {
     await inTenant(tenant, async client => {
@@ -187,4 +188,30 @@ test('permissão fica protegida contra revogação concorrente até finalizar a 
     await client.query("UPDATE app.organization_membership SET status='REVOKED' WHERE actor_id=$1", [actorId]);
   });
   await assert.rejects(withMembershipTransaction(pool, organizationId, actorId, 'VIEWER', async () => undefined), /FORBIDDEN/);
+});
+
+test('cadastro web é atômico, usa senha derivada e sessão revogável', async () => {
+  const email = `web-${randomUUID()}@example.test`, password = 'uma-senha-longa-para-teste';
+  const token = await register(pool, { email, password, name: 'Empresa web' });
+  const identity = await session(pool, token);
+  assert.ok(identity);
+  assert.equal(identity.email, email);
+  const account = (await pool.query('SELECT password_hash FROM identity.account WHERE id=$1', [identity.actorId])).rows[0];
+  assert.notEqual(account.password_hash, password);
+  assert.match(account.password_hash, /^scrypt-v1:/);
+  assert.equal((await pool.query('SELECT token_hash FROM identity.session WHERE actor_id=$1', [identity.actorId])).rows[0].token_hash, digest(token));
+  assert.equal((await getMembership(pool, identity.organizationId, identity.actorId))?.role, 'OWNER');
+  const beforeCount = (await pool.query('SELECT count(*) FROM app.organization')).rows[0].count;
+  await assert.rejects(register(pool, { email, password, name: 'Duplicada' }));
+  assert.equal((await pool.query('SELECT count(*) FROM app.organization')).rows[0].count, beforeCount);
+  await assert.rejects(login(pool, { email, password: 'senha-incorreta' }), /E-mail ou senha/);
+  const secondToken = await login(pool, { email: email.toUpperCase(), password });
+  assert.notEqual(secondToken, token);
+  await logout(pool, token);
+  assert.equal(await session(pool, token), null);
+  assert.ok(await session(pool, secondToken));
+  await pool.query("UPDATE identity.session SET expires_at=now() - interval '1 minute' WHERE token_hash=$1", [digest(secondToken)]);
+  assert.equal(await session(pool, secondToken), null);
+  await pool.query('UPDATE identity.login_limit SET attempts=10 WHERE key_hash=$1', [digest(email)]);
+  await assert.rejects(login(pool, { email, password }), /Muitas tentativas/);
 });
