@@ -1,3 +1,5 @@
+import { parseInteger, positive } from "./quantities.ts";
+
 export type ApiErrorCode =
   | "VALIDATION_ERROR"
   | "UNAUTHORIZED"
@@ -89,9 +91,14 @@ export type CreatePriceRequest = { id: string; organizationId: string; storeId: 
 export function parseCreatePriceRequest(value: unknown): CreatePriceRequest {
   const body = object(value);
   strictKeys(body, ["id", "organizationId", "storeId", "productId", "channel", "amountMinor", "currency", "revision"]);
-  const amountMinor = stringField(body, "amountMinor", 19);
-  const revision = stringField(body, "revision", 19);
-  if (!/^\d+$/.test(amountMinor) || !/^\d+$/.test(revision) || BigInt(revision) < 1n) throw new ApiError(400, "VALIDATION_ERROR", "Invalid price number");
+  let amountMinor: string;
+  let revision: string;
+  try {
+    amountMinor = parseInteger(body.amountMinor).toString();
+    revision = positive(parseInteger(body.revision)).toString();
+  } catch {
+    throw new ApiError(400, "VALIDATION_ERROR", "Invalid price number");
+  }
   const currency = stringField(body, "currency", 3);
   if (!CURRENCY.test(currency)) throw new ApiError(400, "VALIDATION_ERROR", "Invalid currency", { currency: "must be three uppercase letters" });
   return { id: uuidField(body, "id"), organizationId: uuidField(body, "organizationId"), storeId: uuidField(body, "storeId"), productId: uuidField(body, "productId"), channel: enumField(body, "channel", CHANNELS), amountMinor, currency, revision };

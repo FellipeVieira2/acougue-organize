@@ -20,7 +20,3 @@ CREATE POLICY membership_isolation ON app.organization_membership
   WITH CHECK (organization_id = app.tenant_id());
 
 GRANT SELECT, INSERT, UPDATE ON app.organization_membership TO acougue_runtime;
-
-INSERT INTO public.schema_migrations (name, checksum)
-VALUES ('0003_organization_membership.sql', 'applied-through-neon-mcp')
-ON CONFLICT (name) DO NOTHING;
