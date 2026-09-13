@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { ApiError, parseCreatePriceRequest, parseCreateProductRequest, parseIfMatch } from '../src/api.ts';
+import { ApiError, parseCreateCatalogOfferRequest, parseCreateInventoryItemRequest, parseCreatePreparationOptionRequest, parseCreatePriceRequest, parseCreateProductRequest, parseIfMatch } from '../src/api.ts';
 
 const price = { id: randomUUID(), organizationId: randomUUID(), storeId: randomUUID(), productId: randomUUID(), channel: 'POS', amountMinor: '3790', currency: 'BRL', revision: '1' };
 
@@ -28,4 +28,12 @@ test('DTO rejeita campos adicionais e combinação incompatível de venda', () =
 test('If-Match exige versão positiva e representável', () => {
   assert.equal(parseIfMatch('"12"'), 12);
   for (const value of [null, '12', '"0"', '"9007199254740992"']) assert.throws(() => parseIfMatch(value), ApiError);
+});
+
+test('parsers do açougue preservam preparo, estoque físico e limites de peso', () => {
+  const organizationId = '11111111-1111-4111-8111-111111111111';
+  assert.equal(parseCreatePreparationOptionRequest({ id: '22222222-2222-4222-8222-222222222222', organizationId, code: 'MOIDO', name: 'Moído' }).code, 'MOIDO');
+  assert.equal(parseCreateInventoryItemRequest({ id: '33333333-3333-4333-8333-333333333333', organizationId, name: 'Acém bovino', sku: 'ACEM-FISICO', baseUnit: 'G' }).baseUnit, 'G');
+  assert.equal(parseCreateCatalogOfferRequest({ id: '44444444-4444-4444-8444-444444444444', organizationId, productId: '55555555-5555-4555-8555-555555555555', inventoryItemId: '33333333-3333-4333-8333-333333333333', preparationOptionId: '22222222-2222-4222-8222-222222222222', sku: 'ACEM-MOIDO', saleUnit: 'G', minWeightG: '900', maxWeightG: '1100', defaultWeightG: '1000' }).maxWeightG, '1100');
+  assert.throws(() => parseCreatePreparationOptionRequest({ id: '22222222-2222-4222-8222-222222222222', organizationId, code: 'moido', name: 'Moído' }), ApiError);
 });

@@ -1,13 +1,15 @@
 "use client"
 
 import useSWR from "swr"
-import { useState, type FormEvent } from "react"
-import { ArrowUpRight, Beef, Boxes, LayoutDashboard, Menu, PackagePlus, Store, X } from "lucide-react"
+import { useEffect, useState, type FormEvent } from "react"
+import { ArrowUpRight, Beef, Boxes, ClipboardList, LayoutDashboard, Menu, PackagePlus, Store, X } from "lucide-react"
 import { formatBRL, priceToMinor } from "../lib/money.ts"
+import { resolveSelectedStore } from "../lib/store.ts"
 
-const navItems = [{ label: "Visão geral", icon: LayoutDashboard }, { label: "Catálogo", icon: Beef }, { label: "Estoque", icon: Boxes }, { label: "Lojas", icon: Store }]
+const navItems = [{ label: "Visão geral", icon: LayoutDashboard }, { label: "Catálogo", icon: Beef }, { label: "Pedidos", icon: ClipboardList }, { label: "Estoque", icon: Boxes }, { label: "Lojas", icon: Store }]
 type DashboardProduct = { id: string; name: string; sku: string; stock_unit: string; active: boolean; version: string; amountMinor: string | null }
-type DashboardData = { organization: { name: string; status: string }; email: string; role: string; canCreateProduct: boolean; priceStore: string | null; hasMore: boolean; stores: { id: string; name: string; active: boolean }[]; products: DashboardProduct[]; activity: { id: string; action: string; reason: string | null; created_at: string }[] }
+type DashboardOrder = { id: string; publicNumber: string; customerName: string; fulfillmentType: string; fulfillmentStatus: string; estimatedTotalMinor: string; finalTotalMinor: string | null; createdAt: string }
+type DashboardData = { organization: { name: string; status: string }; email: string; role: string; canCreateProduct: boolean; priceStore: string | null; selectedStoreId: string | null; selectedStoreName: string | null; hasMore: boolean; stores: { id: string; name: string; active: boolean }[]; products: DashboardProduct[]; orders: DashboardOrder[]; activity: { id: string; action: string; reason: string | null; created_at: string }[] }
 class HttpError extends Error { readonly status: number; constructor(message: string, status: number) { super(message); this.status = status } }
 async function api(url: string, body?: unknown) {
   const response = await fetch(url, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
@@ -27,10 +29,18 @@ export default function Home() {
   const [editing, setEditing] = useState<DashboardProduct | null>(null)
   const [message, setMessage] = useState("")
   const [signingOut, setSigningOut] = useState(false)
-  const { data, error, isLoading, isValidating, mutate } = useSWR<DashboardData, HttpError>("/api/dashboard", api, { shouldRetryOnError: false })
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null)
+  const dashboardKey = selectedStoreId ? `/api/dashboard?storeId=${encodeURIComponent(selectedStoreId)}` : "/api/dashboard"
+  const { data, error, isLoading, isValidating, mutate } = useSWR<DashboardData, HttpError>(dashboardKey, api, { shouldRetryOnError: false })
+  useEffect(() => {
+    if (!data) return
+    const resolved = resolveSelectedStore(data.stores, selectedStoreId ?? data.selectedStoreId ?? null)
+    if (resolved && resolved.id !== selectedStoreId) setSelectedStoreId(resolved.id)
+  }, [data, selectedStoreId])
   if (error?.status === 401) return <Access onSuccess={async () => { setSearch(""); setStatus("all"); setMessage(""); setCreating(false); setEditing(null); await mutate() }} />
   if (error?.status === 403) return <main className="access-shell"><section className="access-card"><Brand /><h1>Acesso indisponível</h1><p>Seu acesso a esta empresa não está ativo.</p><button className="primary-button" onClick={() => void api("/api/auth/logout", {}).then(() => mutate(undefined)).catch(() => setMessage("Não foi possível sair. Tente novamente."))}>Sair</button><p role="alert">{message}</p></section></main>
   if (!data) return <main className="access-shell"><section className="access-card"><Brand /><h1>{isLoading ? "Abrindo sua operação…" : "Não foi possível abrir o painel"}</h1>{error && <><p role="alert">O serviço está indisponível no momento. Tente novamente em alguns instantes.</p><button className="primary-button" onClick={() => void mutate()}>Tentar novamente</button></>}</section></main>
+  const selectedStore = resolveSelectedStore(data.stores, selectedStoreId ?? data.selectedStoreId ?? null)
   const products = data.products.filter(product => `${product.name} ${product.sku}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")) && (status === "all" || product.active === (status === "active")))
   const initials = data.email.slice(0, 2).toUpperCase()
   async function signOut() {
@@ -50,12 +60,13 @@ export default function Home() {
       <header className="topbar"><button className="mobile-menu" aria-label="Abrir menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button><div className="breadcrumbs"><span>Operação</span><b>/</b><strong>{active}</strong></div><div className="topbar-actions"><span className="status-dot" />{error ? "Atualização pendente" : isValidating ? "Atualizando…" : "Atualizado"}<span className="topbar-divider" /><span className="top-avatar">{initials}</span></div></header>
       <div className="content-wrap">
         <div className="page-heading"><div><p className="eyebrow">SUA OPERAÇÃO, EM UM SÓ LUGAR</p><h1>{active === "Visão geral" ? "Visão geral da operação" : active}</h1><p className="heading-copy">{data.organization.name}</p></div>{data.canCreateProduct && <button className="primary-button" onClick={() => { setActive("Catálogo"); setCreating(true); setEditing(null); setMessage("") }}><PackagePlus />Novo produto</button>}</div>
+        {data.stores.length > 0 && <div className="table-card store-selector"><label htmlFor="store-selector">Loja ativa</label><select id="store-selector" value={selectedStore?.id ?? data.stores[0].id} onChange={event => { setSelectedStoreId(event.target.value); setMessage("") }}><option value="" disabled={!selectedStore}>Selecione a loja</option>{data.stores.map(store => <option key={store.id} value={store.id}>{store.name}{store.active ? " (ativa)" : " (inativa)"}</option>)}</select></div>}
         {error && <div className="status-banner" role="alert">Não foi possível atualizar os dados. <button className="text-button" onClick={() => void mutate()}>Tentar novamente</button></div>}
         {message && <div className="status-banner" role="status">{message}</div>}
-        {active === "Estoque" ? <section className="table-card empty-state"><Boxes /><h2>Controle de estoque em preparação</h2><p>Movimentações, saldos e alertas estarão disponíveis em uma próxima etapa.</p></section> : active === "Lojas" ? <section className="table-card"><div className="section-heading"><h2>Suas lojas</h2></div>{data.stores.map(store => <div className="activity-row" key={store.id}><Store /><strong>{store.name}</strong><span className={store.active ? "badge badge-green" : "badge badge-gray"}>{store.active ? "Ativa" : "Inativa"}</span></div>)}</section> : <>
-          {active === "Visão geral" && <div className="metric-grid"><Metric label="Produtos carregados" value={String(data.products.length)} detail={data.hasMore ? "Primeiros 200" : "Catálogo"} /><Metric label="Lojas ativas" value={String(data.stores.filter(store => store.active).length)} detail="Operação" /><Metric label="Produtos com preço" value={String(data.products.filter(product => product.amountMinor !== null).length)} detail={data.priceStore ?? "Sem loja ativa"} /><Metric label="Eventos recentes" value={String(data.activity.length)} detail="Até 5 registros" /></div>}
+        {active === "Pedidos" ? <OrderQueue orders={data.orders} onChanged={() => mutate()} /> : active === "Estoque" ? <section className="table-card empty-state"><Boxes /><h2>Controle de estoque em preparação</h2><p>Movimentações, saldos e alertas estarão disponíveis em uma próxima etapa.</p></section> : active === "Lojas" ? <section className="table-card"><div className="section-heading"><h2>Suas lojas</h2></div>{data.stores.map(store => <div className="activity-row" key={store.id}><Store /><strong>{store.name}</strong><span className={store.active ? "badge badge-green" : "badge badge-gray"}>{store.active ? "Ativa" : "Inativa"}</span></div>)}</section> : <>
+          {active === "Visão geral" && <div className="metric-grid"><Metric label="Produtos carregados" value={String(data.products.length)} detail={data.hasMore ? "Primeiros 200" : "Catálogo"} /><Metric label="Lojas ativas" value={String(data.stores.filter(store => store.active).length)} detail="Operação" /><Metric label="Produtos com preço" value={String(data.products.filter(product => product.amountMinor !== null).length)} detail={selectedStore?.name ?? data.priceStore ?? "Sem loja ativa"} /><Metric label="Eventos recentes" value={String(data.activity.length)} detail="Até 5 registros" /></div>}
           {editing && <EditProduct key={`${editing.id}:${editing.version}`} product={editing} onCancel={() => setEditing(null)} onReload={async () => { const fresh = await mutate(); const current = fresh?.products.find(product => product.id === editing.id); if (current) setEditing(current); else { setEditing(null); setMessage("Produto indisponível. Atualize a busca.") } }} onSuccess={async () => { setEditing(null); setMessage("Produto atualizado com sucesso."); await mutate() }} />}
-          {creating && <ProductForm storeName={data.priceStore} onCancel={() => setCreating(false)} onSuccess={async () => { setCreating(false); setMessage("Produto cadastrado com sucesso."); await mutate() }} />}
+          {creating && <ProductForm storeId={selectedStore?.id ?? null} storeName={selectedStore?.name ?? data.priceStore} onCancel={() => setCreating(false)} onSuccess={async () => { setCreating(false); setMessage("Produto cadastrado com sucesso."); await mutate() }} />}
           <div className="section-heading"><div><h2>Catálogo de produtos</h2><p>Preços de venda em {data.priceStore ?? "uma loja ativa"}. Produtos pesáveis têm preço por kg.</p></div>{active === "Visão geral" && <button className="text-button" onClick={() => setActive("Catálogo")}>Ver catálogo <ArrowUpRight /></button>}</div>
           {data.hasMore && <div className="status-banner">Mostrando os 200 produtos mais recentes. A busca considera apenas esses produtos.</div>}
           <div className="table-card"><div className="table-toolbar"><div className="search-field"><span>⌕</span><input aria-label="Buscar produto" placeholder="Buscar por nome ou SKU" value={search} onChange={event => setSearch(event.target.value)} /></div><select className="filter-button" aria-label="Filtrar por status" value={status} onChange={event => setStatus(event.target.value)}><option value="all">Todos os status</option><option value="active">Ativos</option><option value="inactive">Inativos</option></select></div><div className="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Unidade de venda</th><th>Preço atual</th><th>Status</th>{data.canCreateProduct && <th><span className="sr-only">Ações</span></th>}</tr></thead><tbody>{products.map(product => <tr key={product.id}><td><span className="product-icon"><Beef /></span><strong>{product.name}</strong></td><td className="muted">{product.sku}</td><td className="muted">{product.stock_unit === "G" ? "kg" : "un"}</td><td>{formatBRL(product.amountMinor)}</td><td><span className={product.active ? "badge badge-green" : "badge badge-gray"}>{product.active ? "Ativo" : "Inativo"}</span></td>{data.canCreateProduct && <td><button className="text-button" aria-label={`Editar ${product.name}`} onClick={() => { setEditing(product); setCreating(false); setMessage("") }}>Editar</button></td>}</tr>)}</tbody></table>{products.length === 0 && <p className="empty-state">{search || status !== "all" ? "Nenhum produto encontrado para esse filtro." : "Seu catálogo está vazio. Cadastre o primeiro produto para começar."}</p>}</div></div>
@@ -67,6 +78,23 @@ export default function Home() {
 }
 function Brand() { return <div className="brand"><span className="brand-mark"><Beef /></span><span>Açougue<br /><strong>Organize</strong></span></div> }
 function Metric({ label, value, detail }: { label: string; value: string; detail: string }) { return <article className="metric-card"><p>{label}</p><strong>{value}</strong><span className="metric-detail green">{detail}</span></article> }
+function orderStatusLabel(status: string) { return ({ RECEIVED: "Novo", CONFIRMED: "Confirmado", SEPARATING: "Em separação", WEIGHING: "Pesagem", WAITING_CUSTOMER_APPROVAL: "Aguardando cliente", WEIGHT_ADJUSTED: "Peso aprovado", READY: "Pronto" } as Record<string, string>)[status] ?? status }
+function OrderQueue({ orders, onChanged }: { orders: DashboardOrder[]; onChanged: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState("")
+  async function advance(order: DashboardOrder) {
+    const status = order.fulfillmentStatus === "RECEIVED" ? "CONFIRMED" : "SEPARATING"
+    setBusy(order.id); setError("")
+    try {
+      const response = await fetch(`/api/orders/${order.id}/status`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error?.message ?? "Não foi possível atualizar o pedido.")
+      await onChanged()
+    } catch (value) { setError(value instanceof Error ? value.message : "Não foi possível atualizar o pedido.") }
+    finally { setBusy(null) }
+  }
+  return <section className="table-card order-queue"><div className="section-heading"><div><p className="eyebrow">OPERAÇÃO</p><h2>Fila de pedidos</h2><p>Confirme a entrada e inicie a separação na bancada.</p></div></div>{error && <div className="status-banner" role="alert">{error}</div>}{orders.length === 0 ? <div className="empty-state"><ClipboardList /><h2>Nenhum pedido pendente</h2><p>Quando chegar um pedido online, ele aparecerá aqui.</p></div> : <div className="order-list">{orders.map(order => <article className="order-row" key={order.id}><div className="order-main"><span className="order-number">#{order.publicNumber}</span><strong>{order.customerName}</strong><small>{order.fulfillmentType === "DELIVERY" ? "Entrega" : "Retirada"} · {new Date(order.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</small></div><span className="badge badge-orange">{orderStatusLabel(order.fulfillmentStatus)}</span><strong className="order-total">{formatBRL(order.finalTotalMinor ?? order.estimatedTotalMinor)}</strong>{order.fulfillmentStatus === "RECEIVED" || order.fulfillmentStatus === "CONFIRMED" ? <button className="filter-button" disabled={busy === order.id} onClick={() => void advance(order)}>{busy === order.id ? "Atualizando…" : order.fulfillmentStatus === "RECEIVED" ? "Confirmar" : "Iniciar separação"}</button> : null}</article>)}</div>}</section>
+}
 function Access({ onSuccess }: { onSuccess: () => Promise<void> }) {
   const [registering, setRegistering] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("")
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -78,12 +106,12 @@ function Access({ onSuccess }: { onSuccess: () => Promise<void> }) {
   }
   return <main className="access-shell"><section className="access-card"><Brand /><h1>{registering ? "Comece a organizar seu açougue" : "Entre na sua operação"}</h1><p>Produtos, lojas e preços em um só lugar.</p><form className="editor-form" onSubmit={event => void submit(event)}>{registering && <label>Nome do açougue<input name="name" required maxLength={200} autoComplete="organization" /></label>}<label>E-mail<input name="email" type="email" required maxLength={254} autoComplete="username" /></label><label>Senha<input name="password" type="password" required minLength={registering ? 12 : 1} maxLength={256} autoComplete={registering ? "new-password" : "current-password"} /></label>{registering && <small>Use pelo menos 12 caracteres. Novos cadastros dependem da liberação do serviço.</small>}{error && <p className="form-error" role="alert">{error}</p>}<button className="primary-button" disabled={busy}>{busy ? "Aguarde…" : registering ? "Criar conta" : "Entrar"}</button></form><button className="text-button access-switch" disabled={busy} onClick={() => { setRegistering(!registering); setError("") }}>{registering ? "Já tenho uma conta" : "Criar uma conta"}</button></section></main>
 }
-function ProductForm({ onSuccess, onCancel, storeName }: { onSuccess: () => Promise<void>; onCancel: () => void; storeName: string | null }) {
+function ProductForm({ onSuccess, onCancel, storeId, storeName }: { onSuccess: () => Promise<void>; onCancel: () => void; storeId: string | null; storeName: string | null }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [unit, setUnit] = useState("G")
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError("")
     const fields = new FormData(event.currentTarget)
-    try { await api("/api/products", { name: fields.get("name"), sku: fields.get("sku"), stockUnit: unit, amountMinor: priceToMinor(String(fields.get("price"))) }); await onSuccess() }
+    try { await api("/api/products", { name: fields.get("name"), sku: fields.get("sku"), stockUnit: unit, amountMinor: priceToMinor(String(fields.get("price"))), storeId: storeId ?? undefined }); await onSuccess() }
     catch (failure) { setError(failure instanceof Error ? failure.message : "Não foi possível salvar.") }
     finally { setBusy(false) }
   }

@@ -12,6 +12,20 @@ A integração foi consolidada na main em dde6323, após o painel da v0 da PR #5
 - Permissão validada na mesma transação da operação, com bloqueio contra revogação concorrente.
 - Valores monetários integrais até a exibição, sem perda de centavos.
 - Build Next.js para Vercel, sem dependência do banco durante o build.
+- Primeira fatia do domínio de açougue: preparos, estoque físico, ofertas, saldo, movimentos e reservas com isolamento RLS.
+- Operações autorizadas de criação de preparo/estoque/oferta, ajuste de saldo com ledger e reserva condicional sem overselling.
+- Fundação de pedidos: `sales_order`, `order_item` com snapshot, `order_event`, estados separados e vínculo explícito entre reserva e item.
+- Caso de uso transacional de criação de pedido interno: preço vigente no servidor, cálculo estimado, snapshot, reserva e evento com rollback conjunto.
+- Operação transacional de pesagem: peso final, validação de faixa/teto, consumo físico, liberação do excedente, total final e espera por aprovação quando necessário.
+- Aprovação transacional de item pesado: resolve itens fora da faixa, recalcula o total final quando o pedido fica completo e registra `ORDER_ITEM_APPROVED` sem novo consumo de estoque.
+- Catálogo público por slug de loja, com ofertas publicadas, preparo, limites de peso e preço vigente.
+- Quote público recalculado no servidor, com validação de ofertas, quantidades, moeda e total estimado.
+- Checkout convidado transacional em `/api/public/stores/{slug}/orders`, com snapshot de preço, reserva atômica, token de acompanhamento derivado no servidor e `Idempotency-Key`.
+- Consulta pública protegida por token em `/api/public/stores/{slug}/orders/{publicNumber}?token=...`, sem permitir acesso apenas pelo número do pedido.
+- Storefront público em `/{storeSlug}` com busca de cortes, apresentação, peso, carrinho e checkout convidado responsivo.
+- Página de acompanhamento em `/{storeSlug}/pedido/{publicNumber}` com token, status, itens, peso e total estimado/final.
+- Aprovação pública de peso via token em `/api/public/stores/{slug}/orders/{publicNumber}/approve`, sem nova movimentação de estoque.
+- Fila administrativa de pedidos no dashboard, com confirmação e início de separação autorizados para operadores.
 
 ## Evidências locais
 
@@ -21,7 +35,7 @@ Essa evidência não confirma a configuração do banco nem o deployment remoto.
 
 ## Próximas implementações
 
-Recuperação/verificação de e-mail, convites, escolha de empresa/loja, paginação completa, edição de preços com revisão concorrente, estoque, pedidos, caixa e billing. O painel informa o limite dos 200 produtos carregados. Estoque tem estado explícito de funcionalidade em preparação, sem números demonstrativos.
+Recuperação/verificação de e-mail, convites, escolha de empresa/loja, paginação completa, integração avançada dessas entidades no painel, caixa e billing. O painel informa o limite dos 200 produtos carregados. Catálogo, quote, criação, acompanhamento e aprovação pública de pedidos já existem nas rotas `/api/public/stores/{slug}/catalog`, `/api/public/stores/{slug}/quote`, `/api/public/stores/{slug}/orders`, `/api/public/stores/{slug}/orders/{publicNumber}` e `/api/public/stores/{slug}/orders/{publicNumber}/approve`; as telas públicas estão em `/{storeSlug}` e `/{storeSlug}/pedido/{publicNumber}`.
 
 O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele não está exposto como rota Next e não implementa persistência de idempotência; validar o cabeçalho não equivale a garantir reexecução segura. As rotas web concretas usam as próprias transações autorizadas.
 

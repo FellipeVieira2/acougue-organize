@@ -1,9 +1,39 @@
 import type { Pool } from "pg";
-import { ApiError, parseCreatePriceRequest, parseCreateProductRequest, parseCreateStoreRequest, type CreatePriceRequest, type CreateProductRequest, type CreateStoreRequest } from "./api.ts";
+import { ApiError, parseCreateCatalogOfferRequest, parseCreateInventoryItemRequest, parseCreatePreparationOptionRequest, parseCreatePriceRequest, parseCreateProductRequest, parseCreateStoreRequest, type CreateCatalogOfferRequest, type CreateInventoryItemRequest, type CreatePreparationOptionRequest, type CreatePriceRequest, type CreateProductRequest, type CreateStoreRequest } from "./api.ts";
 import { withMembershipTransaction } from "./membership.ts";
+import { parseInteger, positive } from "./quantities.ts";
 
 export type CatalogProductInput = CreateProductRequest;
 export type CatalogStoreInput = CreateStoreRequest;
+export type CatalogPreparationInput = CreatePreparationOptionRequest;
+export type CatalogInventoryInput = CreateInventoryItemRequest;
+export type CatalogOfferInput = CreateCatalogOfferRequest;
+
+export type InventoryAdjustmentInput = {
+  organizationId: string; storeId: string; inventoryItemId: string; balanceId: string; movementId: string; actorId: string;
+  quantityDelta: string; reason: string;
+};
+
+export type InventoryReservationInput = {
+  organizationId: string; storeId: string; inventoryItemId: string; reservationId: string; referenceId: string;
+  reservedQty: string; expiresAt?: string | null;
+};
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function requireUuid(value: string, field: string): void {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) throw new ApiError(400, "VALIDATION_ERROR", `Invalid ${field}`);
+}
+
+function requireQuantity(value: string, field: string, allowNegative = false): string {
+  try {
+    const quantity = parseInteger(value);
+    if (!allowNegative) return positive(quantity).toString();
+    if (quantity === 0n) throw new Error("zero");
+    return quantity.toString();
+  } catch {
+    throw new ApiError(400, "VALIDATION_ERROR", `Invalid ${field}`);
+  }
+}
 
 export async function createStoreAuthorized(pool: Pool, actorId: string, input: CatalogStoreInput): Promise<void> {
   input = parseCreateStoreRequest(input);
@@ -25,6 +55,96 @@ export async function createProductAuthorized(pool: Pool, actorId: string, input
     await client.query(`INSERT INTO app.product (id, organization_id, sku, name, stock_unit, sale_strategy)
       VALUES ($1, $2, $3, $4, $5, $6)`,
       [input.id, input.organizationId, input.sku, input.name, input.stockUnit, input.saleStrategy]);
+  });
+}
+
+export async function createPreparationOptionAuthorized(pool: Pool, actorId: string, input: CatalogPreparationInput): Promise<void> {
+  input = parseCreatePreparationOptionRequest(input);
+  await withMembershipTransaction(pool, input.organizationId, actorId, "MANAGER", async client => {
+    await client.query(`INSERT INTO app.preparation_option (id, organization_id, code, name) VALUES ($1, $2, $3, $4)`,
+      [input.id, input.organizationId, input.code, input.name]);
+  });
+}
+
+export async function createInventoryItemAuthorized(pool: Pool, actorId: string, input: CatalogInventoryInput): Promise<void> {
+  input = parseCreateInventoryItemRequest(input);
+  await withMembershipTransaction(pool, input.organizationId, actorId, "MANAGER", async client => {
+    await client.query(`INSERT INTO app.inventory_item (id, organization_id, name, sku, base_unit) VALUES ($1, $2, $3, $4, $5)`,
+      [input.id, input.organizationId, input.name, input.sku, input.baseUnit]);
+  });
+}
+
+export async function createCatalogOfferAuthorized(pool: Pool, actorId: string, input: CatalogOfferInput): Promise<void> {
+  input = parseCreateCatalogOfferRequest(input);
+  await withMembershipTransaction(pool, input.organizationId, actorId, "MANAGER", async client => {
+    const units = await client.query<{ productUnit: string; inventoryUnit: string }>(`SELECT p.stock_unit AS "productUnit", i.base_unit AS "inventoryUnit"
+      FROM app.product p JOIN app.inventory_item i ON i.organization_id = p.organization_id
+        AND i.id = $3
+      WHERE p.organization_id = $1 AND p.id = $2`, [input.organizationId, input.productId, input.inventoryItemId]);
+    const unit = units.rows[0];
+    if (!unit || unit.productUnit !== unit.inventoryUnit || (input.saleUnit === "UNIT" && unit.inventoryUnit !== "UNIT") || (input.saleUnit !== "UNIT" && unit.inventoryUnit !== "G")) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Offer sale unit does not match product and physical inventory");
+    }
+    await client.query(`INSERT INTO app.catalog_offer
+      (id, organization_id, product_id, inventory_item_id, preparation_option_id, sku, sale_unit, min_weight_g, max_weight_g, weight_step_g, default_weight_g)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [input.id, input.organizationId, input.productId, input.inventoryItemId, input.preparationOptionId, input.sku, input.saleUnit, input.minWeightG, input.maxWeightG, input.weightStepG, input.defaultWeightG]);
+  });
+}
+
+export async function adjustInventoryAuthorized(pool: Pool, input: InventoryAdjustmentInput): Promise<void> {
+  requireUuid(input.organizationId, "organizationId");
+  requireUuid(input.storeId, "storeId");
+  requireUuid(input.inventoryItemId, "inventoryItemId");
+  requireUuid(input.balanceId, "balanceId");
+  requireUuid(input.movementId, "movementId");
+  requireUuid(input.actorId, "actorId");
+  const quantityDelta = requireQuantity(input.quantityDelta, "quantityDelta", true);
+  if (typeof input.reason !== "string" || !input.reason.trim() || input.reason.trim().length > 500) throw new ApiError(400, "VALIDATION_ERROR", "Invalid reason");
+  await withMembershipTransaction(pool, input.organizationId, input.actorId, "OPERATOR", async client => {
+    const positiveAdjustment = BigInt(quantityDelta) > 0n;
+    if (positiveAdjustment) {
+      await client.query(`INSERT INTO app.inventory_balance
+        (id, organization_id, store_id, inventory_item_id, on_hand_qty)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (organization_id, store_id, inventory_item_id)
+        DO UPDATE SET on_hand_qty = app.inventory_balance.on_hand_qty + EXCLUDED.on_hand_qty,
+          version = app.inventory_balance.version + 1, updated_at = now()`,
+        [input.balanceId, input.organizationId, input.storeId, input.inventoryItemId, quantityDelta]);
+    } else {
+      const result = await client.query(`UPDATE app.inventory_balance
+        SET on_hand_qty = on_hand_qty + $4, version = version + 1, updated_at = now()
+        WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3
+          AND on_hand_qty + $4 >= reserved_qty`,
+        [input.organizationId, input.storeId, input.inventoryItemId, quantityDelta]);
+      if (result.rowCount !== 1) throw new ApiError(409, "CONFLICT", "Inventory adjustment would make available stock invalid");
+    }
+    await client.query(`INSERT INTO app.inventory_movement
+      (id, organization_id, store_id, inventory_item_id, movement_type, quantity_delta, reference_type, reference_id, reason, actor_id)
+      VALUES ($1, $2, $3, $4, 'ADJUSTMENT', $5, 'MANUAL_ADJUSTMENT', $1, $6, $7)`,
+      [input.movementId, input.organizationId, input.storeId, input.inventoryItemId, quantityDelta, input.reason.trim(), input.actorId]);
+  });
+}
+
+export async function reserveInventoryAuthorized(pool: Pool, actorId: string, input: InventoryReservationInput): Promise<void> {
+  requireUuid(actorId, "actorId");
+  requireUuid(input.organizationId, "organizationId");
+  requireUuid(input.storeId, "storeId");
+  requireUuid(input.inventoryItemId, "inventoryItemId");
+  requireUuid(input.reservationId, "reservationId");
+  requireUuid(input.referenceId, "referenceId");
+  const reservedQty = requireQuantity(input.reservedQty, "reservedQty");
+  await withMembershipTransaction(pool, input.organizationId, actorId, "OPERATOR", async client => {
+    const result = await client.query(`UPDATE app.inventory_balance
+      SET reserved_qty = reserved_qty + $4, version = version + 1, updated_at = now()
+      WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3
+        AND on_hand_qty - reserved_qty >= $4`,
+      [input.organizationId, input.storeId, input.inventoryItemId, reservedQty]);
+    if (result.rowCount !== 1) throw new ApiError(409, "CONFLICT", "Insufficient available inventory");
+    await client.query(`INSERT INTO app.inventory_reservation
+      (id, organization_id, store_id, inventory_item_id, reserved_qty, status, reference_type, reference_id, expires_at)
+      VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 'EXTERNAL_REFERENCE', $6, $7)`,
+      [input.reservationId, input.organizationId, input.storeId, input.inventoryItemId, reservedQty, input.referenceId, input.expiresAt ?? null]);
   });
 }
 
@@ -66,4 +186,9 @@ export {
   listProductsAuthorized as listProductsWithPermission,
   updateProductNameAuthorized as updateProductNameWithPermission,
   appendProductPriceAuthorized as appendProductPriceWithPermission,
+  createPreparationOptionAuthorized as createPreparationOptionWithPermission,
+  createInventoryItemAuthorized as createInventoryItemWithPermission,
+  createCatalogOfferAuthorized as createCatalogOfferWithPermission,
+  adjustInventoryAuthorized as adjustInventoryWithPermission,
+  reserveInventoryAuthorized as reserveInventoryWithPermission,
 };
