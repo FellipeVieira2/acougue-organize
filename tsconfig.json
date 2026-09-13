@@ -34,6 +34,8 @@
     ]
   },
   "include": [
+    "lib/**/*.ts",
+    "scripts/**/*.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "next-env.d.ts",

@@ -23,6 +23,8 @@ export type HttpResponse = {
 };
 
 export type CatalogHttpDependencies = {
+  /** Resolve identity from a verified session; never use client identity/permission headers. */
+  authenticate?: (request: HttpRequest) => Promise<RequestContext | null>;
   createStore?: (input: ReturnType<typeof parseCreateStoreRequest>, context: RequestContext) => Promise<unknown>;
   createProduct?: (input: ReturnType<typeof parseCreateProductRequest>, context: RequestContext) => Promise<unknown>;
   createPrice?: (input: ReturnType<typeof parseCreatePriceRequest>, context: RequestContext) => Promise<unknown>;
@@ -34,12 +36,10 @@ export type RequestContext = {
   permissions: readonly string[];
 };
 
-function requireContext(request: HttpRequest): RequestContext {
-  const organizationId = request.headers["x-organization-id"];
-  const actorId = request.headers["x-actor-id"];
-  const permissions = request.headers["x-permissions"]?.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
-  if (!organizationId || !actorId) throw new ApiError(401, "UNAUTHORIZED", "Authentication is required");
-  return { organizationId, actorId, permissions };
+async function requireContext(request: HttpRequest, dependencies: CatalogHttpDependencies): Promise<RequestContext> {
+  const context = await dependencies.authenticate?.(request);
+  if (!context) throw new ApiError(401, "UNAUTHORIZED", "Authentication is required");
+  return context;
 }
 
 function requirePermission(context: RequestContext, permission: string): void {
@@ -52,7 +52,7 @@ function json(status: number, body: unknown): HttpResponse {
 
 export async function handleCatalogRequest(request: HttpRequest, dependencies: CatalogHttpDependencies): Promise<HttpResponse> {
   try {
-    const context = requireContext(request);
+    const context = await requireContext(request, dependencies);
     if (request.method === "POST" && request.path === "/stores") {
       requirePermission(context, "store.create");
       parseIdempotencyKey(request.headers["idempotency-key"] ?? null);
@@ -87,5 +87,5 @@ export async function handleCatalogRequest(request: HttpRequest, dependencies: C
 }
 
 export function requestHeaders(headers: Headers): Record<string, string | undefined> {
-  return Object.fromEntries(["x-organization-id", "x-actor-id", "x-permissions", "idempotency-key", "if-match"].map((name) => [name, headers.get(name) ?? undefined]));
+  return Object.fromEntries(["cookie", "idempotency-key", "if-match"].map((name) => [name, headers.get(name) ?? undefined]));
 }

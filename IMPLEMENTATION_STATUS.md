@@ -1,22 +1,31 @@
-# Estado de implementação
+# Integração web e continuidade com a v0
 
-Atualizado em 2026-09-10.
+Base desta entrega: main em 7f85cca (PR #5 da v0). O painel verde, CSS, SWR e configuração Next.js da v0 foram preservados e conectados à autenticação do servidor.
 
-| Entrega | Estado | Evidência |
-|---|---|---|
-| Arquitetura operacional V1 | Elaborada | BUTCHER_PLATFORM_ARCHITECTURE_V1.md |
-| Arquitetura SaaS V1 | Elaborada | SAAS_PLATFORM_ARCHITECTURE_V1.md |
-| Modelo de dados V1 | Elaborado | DATABASE_SCHEMA_V1.md |
-| Contrato da API V1 | Elaborado | API_CONTRACT_V1.md |
-| Plano de implementação | Elaborado | MVP_IMPLEMENTATION_PLAN.md |
-| Núcleo de regras TypeScript | Implementado e validado localmente | packages/domain/src; 17 testes unitários passaram, typecheck e build passaram |
-| Fundação PostgreSQL | Schema aplicado e runtime inicial implementado | Neon: schema `app`, RLS, role `acougue_runtime` e ledger `public.schema_migrations` aplicados; `packages/domain/src/database.ts` e `migrations.ts` adicionados |
-| CI | Workflow preparado | .github/workflows/ci.yml; aguarda execução remota |
-| API, autenticação e interfaces | Em andamento | Validação estrita de DTOs, headers If-Match/Idempotency-Key e respostas de erro implementadas no domínio; autenticação e adaptadores HTTP ainda pendentes |
-| Produção/homologação | Pendente | Não liberado para operação real |
+## Funcionando nesta etapa
 
-Especificações são o projeto de implementação. Rotas, tabelas e módulos descritos não devem ser anunciados como já funcionais. O plano completo permanece aberto até haver evidência por requisito.
+- Cadastro de empresa, matriz e proprietário na mesma transação, habilitado por ALLOW_SIGNUP.
+- Login, sessão revogável em cookie HttpOnly, logout e limitação persistida de tentativas por e-mail.
+- Painel autenticado: empresa, lojas, produtos, preços da primeira loja ativa e últimas cinco atividades reais.
+- Cadastro atômico de produto e preço inicial, busca e filtro de status.
+- Permissão validada na mesma transação da operação, com bloqueio contra revogação concorrente.
+- Valores monetários integrais até a exibição, sem perda de centavos.
+- Build Next.js para Vercel, sem dependência do banco durante o build.
 
-## Limites da validação atual
+## Evidências locais
 
-Os testes unitários cobrem cálculo inteiro, tolerância, guardas de pedido/pagamento, limites/overrides e rateio de produção. Não provam idempotência transacional, isolamento de aplicação, concorrência real, integração com gateway, offline ou operação comercial. Helpers puros de quota exigem lock no serviço; helpers de transição exigem autorização, versão e persistência na aplicação.
+Em 13/09/2026: 32 testes unitários, 13 testes com PostgreSQL 17 e um fluxo HTTP passaram, assim como a checagem TypeScript e o build de produção. O teste HTTP cobre também a rota de dashboard criada pela v0: cabeçalhos de identidade falsos não autenticam, dados da segunda empresa não aparecem na primeira, respostas não são cacheadas e logout invalida o acesso. Cadastro e inclusão de produto também foram conferidos pelo navegador local.
+
+Essa evidência não confirma a configuração do banco nem o deployment remoto.
+
+## Próximas implementações
+
+Recuperação/verificação de e-mail, convites, escolha de empresa/loja, paginação completa, edição com revisão concorrente, estoque, pedidos, caixa e billing. O painel informa o limite dos 200 produtos carregados. Estoque tem estado explícito de funcionalidade em preparação, sem números demonstrativos.
+
+O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele não está exposto como rota Next e não implementa persistência de idempotência; validar o cabeçalho não equivale a garantir reexecução segura. As rotas web concretas usam as próprias transações autorizadas.
+
+## Trabalhando entre Codex e v0
+
+Antes de uma nova alteração, atualize a partir da branch integrada mais recente. Preserve lib/auth.ts, lib/web.ts, os testes e as validações de sessão nas rotas. A interface não deve escolher empresa, ator ou permissões por cabeçalhos ou variáveis NEXT_PUBLIC. Nunca restaure a antiga consulta de dashboard sem sessão.
+
+A PR #3 continha a base anterior de autenticação. Esta integração parte da main mais recente e incorpora essa base; não sobreponha o painel da v0 com a interface antiga daquela etapa.

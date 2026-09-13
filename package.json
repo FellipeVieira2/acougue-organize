@@ -12,6 +12,8 @@
     "start": "next start",
     "test": "node --test packages/domain/test/*.test.ts",
     "test:integration": "node --test packages/domain/test/database.integration.ts",
+    "test:http": "node --test packages/domain/test/http.integration.ts",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.ts",
     "typecheck": "tsc --noEmit",
     "build": "next build",
     "check": "pnpm typecheck && pnpm test && pnpm build"
@@ -21,10 +23,10 @@
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "pg": "^8.23.0",
     "typescript": "7.0.2"
   },
   "dependencies": {
+    "pg": "^8.23.0",
     "lucide-react": "^1.45.0",
     "next": "^16.3.5",
     "react": "^19.3.0",

@@ -35,3 +35,11 @@ jobs:
       - run: pnpm test:integration
         env:
           DATABASE_TEST_URL: postgres://postgres:ephemeral-test-only@localhost:5432/acougue_test
+      - run: |
+          pnpm start > /tmp/acougue-web.log 2>&1 &
+          pnpm test:http
+        env:
+          DATABASE_URL: postgres://postgres:ephemeral-test-only@localhost:5432/acougue_test
+          APP_URL: http://localhost:3000
+          APP_TEST_URL: http://localhost:3000
+          ALLOW_SIGNUP: 'true'

@@ -1,56 +1,41 @@
-import { createPool, createTenantTransaction } from "../../../packages/domain/src/database.ts"
+import { NextRequest, NextResponse } from 'next/server.js';
+import { randomUUID } from 'node:crypto';
+import { ApiError, apiErrorResponse } from '../../../packages/domain/src/api.ts';
+import { withMembershipTransaction, canPerform } from '../../../packages/domain/src/membership.ts';
+import { session } from '../../../lib/auth.ts';
+import { database } from '../../../lib/web.ts';
 
-export const dynamic = "force-dynamic"
-export const runtime = "nodejs"
-export const maxDuration = 30
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 30;
+const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-
-export async function GET(request: Request) {
-  const organizationId = request.headers.get("x-organization-id") ?? process.env.ORGANIZATION_ID
-  if (!organizationId || !UUID_PATTERN.test(organizationId)) {
-    return Response.json({ error: "ORGANIZATION_ID_REQUIRED" }, { status: 400 })
-  }
-
-  const pool = createPool()
-  const transaction = createTenantTransaction(pool)
-
+export async function GET(request: NextRequest) {
   try {
-    const dashboard = await transaction(organizationId, async (client) => {
-      const [organization, stores, products, activity] = await Promise.all([
-        client.query<{ name: string; status: string }>("SELECT name, status FROM app.organization WHERE id = $1", [organizationId]),
-        client.query<{ id: string; name: string; active: boolean }>("SELECT id, name, active FROM app.store ORDER BY created_at ASC", []),
-        client.query<{ id: string; name: string; sku: string; stock_unit: string; active: boolean; amount_minor: string | null; currency: string | null }>(
-          `SELECT p.id, p.name, p.sku, p.stock_unit, p.active, price.amount_minor, price.currency
-           FROM app.product p
-           LEFT JOIN LATERAL (
-             SELECT amount_minor, currency FROM app.product_price
-             WHERE product_id = p.id AND channel = 'POS'
-             ORDER BY revision DESC LIMIT 1
-           ) price ON true
-           ORDER BY p.created_at DESC`,
-          [],
-        ),
-        client.query<{ action: string; reason: string | null; created_at: string }>("SELECT action, reason, created_at FROM app.audit_log ORDER BY created_at DESC LIMIT 5", []),
-      ])
-
-      return {
-        organization: organization.rows[0] ?? null,
-        stores: stores.rows,
-        products: products.rows.map((product) => ({
-          ...product,
-          amountMinor: product.amount_minor,
-          currency: product.currency,
-        })),
-        activity: activity.rows,
-      }
-    })
-
-    return Response.json(dashboard)
+    const cookieName = process.env.NODE_ENV === 'production' ? '__Host-acougue_session' : 'acougue_session';
+    const token = request.cookies.get(cookieName)?.value;
+    if (!token) throw new ApiError(401, 'UNAUTHORIZED', 'Entre para continuar.');
+    const identity = await session(database(), token);
+    if (!identity) throw new ApiError(401, 'UNAUTHORIZED', 'Entre para continuar.');
+    const dashboard = await withMembershipTransaction(database(), identity.organizationId, identity.actorId, 'VIEWER', async (client, membership) => {
+      const organization = (await client.query('SELECT name,status FROM app.organization WHERE id=$1', [identity.organizationId])).rows[0];
+      const stores = (await client.query('SELECT id,name,active FROM app.store ORDER BY created_at,id')).rows;
+      const priceStore = stores.find(store => store.active);
+      const products = (await client.query(`
+        SELECT p.id,p.name,p.sku,p.stock_unit,p.active,price.amount_minor AS "amountMinor",price.currency
+        FROM app.product p LEFT JOIN LATERAL (
+          SELECT amount_minor,currency FROM app.product_price pp
+          WHERE pp.product_id=p.id AND pp.store_id=$1 AND pp.channel='POS'
+          ORDER BY revision DESC LIMIT 1
+        ) price ON true ORDER BY p.created_at DESC,p.id LIMIT 201
+      `, [priceStore?.id ?? null])).rows;
+      const activity = (await client.query('SELECT id,action,reason,created_at FROM app.audit_log ORDER BY created_at DESC,id LIMIT 5')).rows;
+      return { organization, stores, products: products.slice(0, 200), hasMore: products.length > 200, activity,
+        email: identity.email, role: membership.role, canCreateProduct: canPerform(membership.role, 'MANAGER'), priceStore: priceStore?.name ?? null };
+    });
+    return json(dashboard);
   } catch (error) {
-    console.error("[v0] Dashboard query failed", error)
-    return Response.json({ error: "DASHBOARD_UNAVAILABLE" }, { status: 503 })
-  } finally {
-    await pool.end()
+    const result = apiErrorResponse(error, randomUUID());
+    return json(result.body, result.status);
   }
 }

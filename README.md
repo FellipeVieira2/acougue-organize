@@ -1,47 +1,17 @@
 # Açougue Organize
 
-Plataforma SaaS para açougues, casas de carnes e boutiques de carnes. Cada cliente possui uma organização isolada e uma ou mais lojas. O primeiro açougue é cliente piloto, sem regras ou identificadores fixos no produto.
+Aplicação web de gestão para açougues, em implementação com Next.js, React e PostgreSQL. O painel da v0 está integrado ao login e ao catálogo persistido com isolamento entre empresas.
 
-## Estado do projeto
+## Desenvolvimento
 
-Projeto em desenvolvimento. A documentação V1 define o produto e os critérios de aceite; não representa funcionalidades já implementadas nem autorização para operar em produção. O andamento verificável fica em [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+Node.js 24 e pnpm 11.19.0. Instale com `pnpm install --frozen-lockfile`, copie `.env.example` para `.env.local` e configure um banco de desenvolvimento preparado com as migrations. Execute `pnpm dev`.
 
-## Documentação
+`pnpm typecheck`, `pnpm test` e `pnpm build` validam tipos, regras e build. Os testes de banco e HTTP exigem um ambiente efêmero separado, conforme [publicação na Vercel](VERCEL_DEPLOYMENT.md).
 
-1. [Arquitetura operacional](BUTCHER_PLATFORM_ARCHITECTURE_V1.md)
-2. [Arquitetura SaaS](SAAS_PLATFORM_ARCHITECTURE_V1.md)
-3. [Modelo de dados](DATABASE_SCHEMA_V1.md)
-4. [Contrato da API](API_CONTRACT_V1.md)
-5. [Plano de implementação](MVP_IMPLEMENTATION_PLAN.md)
+## Entrega atual
 
-## Princípios
+Login, cadastro inicial opcional, painel autenticado, lojas, criação de produtos com preço, busca, filtro e auditoria. Consulte [estado da implementação](IMPLEMENTATION_STATUS.md) para evidências, limites e continuidade entre Codex e v0.
 
-- Autorização no servidor e isolamento por organização em todos os caminhos de dados.
-- Dinheiro em centavos, peso em gramas e cálculo final no backend.
-- Pedido preserva peso solicitado, peso separado, preço e custo históricos.
-- Estoque e caixa usam lançamentos rastreáveis; correções geram movimentos inversos.
-- Cobrança SaaS é um domínio separado dos pagamentos dos consumidores.
-- Entrega por funcionalidades completas: interface, API, persistência, permissões e testes.
+O build não exige banco, mas o uso da conta e do catálogo exige PostgreSQL configurado. Estoque, pedidos, caixa, cobrança SaaS e recuperação de conta ainda não estão disponíveis nesta interface.
 
-## Stack prevista
-
-Monorepo TypeScript; Next.js/React para as aplicações web; NestJS para API modular; PostgreSQL; Redis/BullMQ para tarefas; armazenamento compatível com S3; Docker para ambientes. ADRs e alternativas estão nas arquiteturas.
-
-## Contribuição
-
-As mudanças devem preservar o modelo SaaS e incluir validação proporcional ao risco. Nunca adicionar dados reais, credenciais, certificados fiscais ou tokens ao repositório. Integrações reais dependem de configuração, capacidades e homologação do respectivo provedor. Nenhum preço comercial de exemplo é uma oferta aprovada.
-
-## Executar a fundação
-
-Requisitos: Node.js 24.12+ da linha 24 e pnpm 11.19.0.
-
-```sh
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm test
-pnpm build
-```
-
-O núcleo TypeScript usa execução nativa no Node para testes, e compilação/verificação separada pelo TypeScript. [Referência do Node](https://nodejs.org/api/typescript.html). O build atual emite somente a biblioteca de domínio; ainda não inicia API ou interface.
-
-Os testes de banco exigem PostgreSQL 17 efêmero e `DATABASE_TEST_URL`; veja [database/README.md](database/README.md). O workflow executa ambos os grupos. Não conectar testes a dados reais.
+Os documentos de arquitetura e requisitos permanecem como referência de evolução, não como afirmação de funcionalidades entregues.
