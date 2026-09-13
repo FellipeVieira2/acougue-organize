@@ -66,3 +66,11 @@ Pendências prioritárias antes de operar o cardápio em produção:
 3. Revisar concorrência entre pesagem/aprovação de itens: serializar pelo pedido antes de recalcular totais e impedir operações em pedidos terminais; testar aprovação de múltiplos itens e excluir cancelados dos totais.
 4. Implementar endereço/taxa para entrega, política de aprovação de alteração de preço entre cotação e envio, expiração/liberação de reservas abandonadas e limitação de pedidos públicos.
 5. Cobrir ponta a ponta todos os fluxos públicos, incluindo falhas de rede, alteração de preços, aprovação e consumo de estoque. As funções existentes de pesagem/aprovação ainda não equivalem a fluxo operacional completo validado.
+
+## Consistência da preparação — 13/09/2026
+
+A pendência de serialização da preparação foi tratada: pesagem, aprovação administrativa e aprovação pública bloqueiam primeiro o pedido, antes de alterar itens ou calcular o total. Pedidos encerrados ou ainda fora da preparação rejeitam essas operações. Itens já pesados não podem consumir estoque novamente.
+
+O resumo distingue itens ainda em pesagem de itens aguardando aprovação, exclui cancelados dos totais e só publica o total final quando todos os itens estão resolvidos. Corrigido também o tipo do parâmetro SQL ao liberar excedente da reserva, que impedia executar a pesagem no PostgreSQL.
+
+Validação: 38 testes unitários e 16 testes PostgreSQL aprovados, incluindo duas pesagens concorrentes, disputa entre aprovação administrativa e pública, token inválido, bloqueio antes da separação e após cancelamento, total final e saldo físico sem consumo duplicado. Build de produção aprovado. As telas administrativas de pesagem e a ativação do banco remoto continuam pendentes.

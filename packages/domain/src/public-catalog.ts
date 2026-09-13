@@ -1,3 +1,4 @@
+import { lockOrderForPreparation, refreshOrderPreparation } from "./order-preparation.ts";
 import type { Pool } from "pg";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { ApiError } from "./api.ts";
@@ -214,21 +215,16 @@ export async function approvePublicOrderItem(pool: Pool, slug: string, publicNum
   requireUuid(orderItemId, "orderItemId");
   if (!/^\d{1,20}$/.test(publicNumber) || !/^[A-Za-z0-9_-]{40,100}$/.test(token)) throw new ApiError(404, "NOT_FOUND", "Pedido não encontrado.");
   return createTenantTransaction(pool)(store.organizationId, async client => {
+    const order = await client.query<{ id: string }>(`SELECT id FROM app.sales_order WHERE organization_id=$1 AND store_id=$2 AND public_number=$3 AND public_access_token_hash=$4 FOR UPDATE`, [store.organizationId,store.storeId,publicNumber,hash(token)]);
+    if (!order.rows[0]) throw new ApiError(404, "NOT_FOUND", "Pedido não encontrado.");
+    await lockOrderForPreparation(client, store.organizationId, order.rows[0].id);
     const item = await client.query<{ finalTotalMinor: string | null; orderId: string }>(`UPDATE app.order_item item SET status='RESOLVED', updated_at=now()
       WHERE item.organization_id=$1 AND item.id=$2 AND item.status='WAITING_CUSTOMER_APPROVAL'
         AND item.order_id=(SELECT id FROM app.sales_order WHERE organization_id=$1 AND store_id=$3 AND public_number=$4 AND public_access_token_hash=$5)
       RETURNING item.final_total_minor::text AS "finalTotalMinor", item.order_id AS "orderId"`, [store.organizationId, orderItemId, store.storeId, publicNumber, hash(token)]);
     const resolved = item.rows[0];
     if (!resolved) throw new ApiError(409, "CONFLICT", "Este item não está aguardando aprovação.");
-    const unresolved = await client.query<{ count: string }>(`SELECT count(*) AS count FROM app.order_item WHERE organization_id=$1 AND order_id=$2 AND status NOT IN ('RESOLVED','CANCELED')`, [store.organizationId, resolved.orderId]);
-    if (unresolved.rows[0]!.count === "0") {
-      const totals = await client.query<{ subtotal: string }>(`SELECT COALESCE(sum(final_total_minor),0)::text AS subtotal FROM app.order_item WHERE organization_id=$1 AND order_id=$2`, [store.organizationId, resolved.orderId]);
-      const order = await client.query<{ delivery: string; discount: string }>(`SELECT delivery_fee_minor::text AS delivery, discount_minor::text AS discount FROM app.sales_order WHERE organization_id=$1 AND id=$2 FOR UPDATE`, [store.organizationId, resolved.orderId]);
-      const subtotal = BigInt(totals.rows[0]!.subtotal);
-      const gross = subtotal + BigInt(order.rows[0]!.delivery);
-      const finalTotal = gross - (BigInt(order.rows[0]!.discount) > gross ? gross : BigInt(order.rows[0]!.discount));
-      await client.query(`UPDATE app.sales_order SET fulfillment_status='WEIGHT_ADJUSTED', final_subtotal_minor=$3, final_total_minor=$4, version=version+1, updated_at=now() WHERE organization_id=$1 AND id=$2`, [store.organizationId, resolved.orderId, subtotal.toString(), finalTotal.toString()]);
-    }
+    await refreshOrderPreparation(client, store.organizationId, resolved.orderId);
     await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload) VALUES ($1,$2,$3,'ORDER_ITEM_APPROVED',$4::jsonb)`, [randomUUID(), store.organizationId, resolved.orderId, JSON.stringify({ orderItemId, public: true })]);
     return { finalTotalMinor: resolved.finalTotalMinor };
   });

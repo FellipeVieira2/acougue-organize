@@ -1,3 +1,4 @@
+import { lockOrderForPreparation, refreshOrderPreparation } from "./order-preparation.ts";
 import type { Pool } from "pg";
 import { randomUUID } from "node:crypto";
 import { ApiError } from "./api.ts";
@@ -154,6 +155,7 @@ export async function weighOrderItemAuthorized(pool: Pool, input: WeighOrderItem
   const finalQty = quantity(input.finalQty, "finalQty");
 
   return withMembershipTransaction(pool, input.organizationId, input.actorId, "OPERATOR", async client => {
+    await lockOrderForPreparation(client, input.organizationId, input.orderId);
     const itemResult = await client.query<{
       inventoryItemId: string; requestedQty: string; reservedQty: string; minQty: string | null; maxQty: string | null;
       maxTotalMinor: string | null; unitPriceMinor: string; pricingType: "PER_KG" | "PER_UNIT" | "FIXED_PACKAGE"; status: string;
@@ -165,7 +167,7 @@ export async function weighOrderItemAuthorized(pool: Pool, input: WeighOrderItem
       FOR UPDATE`, [input.organizationId, input.orderId, input.orderItemId]);
     const item = itemResult.rows[0];
     if (!item) throw new ApiError(404, "NOT_FOUND", "Order item not found");
-    if (item.status === "RESOLVED" || item.status === "CANCELED") throw new ApiError(409, "CONFLICT", "Order item has already been resolved");
+    if (!["PENDING", "SEPARATING", "WEIGHING"].includes(item.status)) throw new ApiError(409, "CONFLICT", "Order item has already been resolved");
     const reservedQty = BigInt(item.reservedQty);
     if (finalQty > reservedQty) throw new ApiError(409, "CONFLICT", "Final quantity exceeds the reservation buffer");
     const minQty = item.minQty === null ? BigInt(item.requestedQty) : BigInt(item.minQty);
@@ -186,7 +188,7 @@ export async function weighOrderItemAuthorized(pool: Pool, input: WeighOrderItem
       [input.organizationId, input.orderId, item.inventoryItemId, finalQty.toString(), reservedQty.toString()]);
     if (balance.rowCount !== 1) throw new ApiError(409, "CONFLICT", "Inventory balance cannot be consumed");
     await client.query(`UPDATE app.inventory_reservation
-      SET status = 'CONSUMED', consumed_qty = $4, released_qty = $5, consumed_at = now(), released_at = CASE WHEN $5 > 0 THEN now() ELSE released_at END
+      SET status = 'CONSUMED', consumed_qty = $4, released_qty = $5, consumed_at = now(), released_at = CASE WHEN $5::bigint > 0 THEN now() ELSE released_at END
       WHERE id = $1 AND organization_id = $2 AND order_item_id = $3 AND status = 'ACTIVE'`,
       [reservation.id, input.organizationId, input.orderItemId, finalQty.toString(), (reservedQty - finalQty).toString()]);
     await client.query(`INSERT INTO app.inventory_movement
@@ -198,23 +200,7 @@ export async function weighOrderItemAuthorized(pool: Pool, input: WeighOrderItem
       WHERE organization_id = $1 AND order_id = $2 AND id = $3`,
       [input.organizationId, input.orderId, input.orderItemId, finalQty.toString(), finalTotalMinor.toString(), requiresApproval ? "WAITING_CUSTOMER_APPROVAL" : "RESOLVED"]);
 
-    const unresolved = await client.query<{ count: string; waiting: string }>(`SELECT
-      count(*) FILTER (WHERE status NOT IN ('RESOLVED','CANCELED')) AS count,
-      count(*) FILTER (WHERE status = 'WAITING_CUSTOMER_APPROVAL') AS waiting
-      FROM app.order_item WHERE organization_id = $1 AND order_id = $2`, [input.organizationId, input.orderId]);
-    const summary = unresolved.rows[0]!;
-    const allResolved = summary.count === "0";
-    const orderStatus = allResolved ? "WEIGHT_ADJUSTED" : "WAITING_CUSTOMER_APPROVAL";
-    if (allResolved) {
-      const totals = await client.query<{ subtotal: string }>(`SELECT COALESCE(sum(final_total_minor), 0)::text AS subtotal FROM app.order_item WHERE organization_id = $1 AND order_id = $2`, [input.organizationId, input.orderId]);
-      const order = await client.query<{ delivery: string; discount: string }>(`SELECT delivery_fee_minor::text AS delivery, discount_minor::text AS discount FROM app.sales_order WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId]);
-      const subtotal = BigInt(totals.rows[0]!.subtotal);
-      const grossBeforeDiscount = subtotal + BigInt(order.rows[0]!.delivery);
-      const gross = grossBeforeDiscount - (BigInt(order.rows[0]!.discount) > grossBeforeDiscount ? grossBeforeDiscount : BigInt(order.rows[0]!.discount));
-      await client.query(`UPDATE app.sales_order SET fulfillment_status = $3, final_subtotal_minor = $4, final_total_minor = $5, version = version + 1, updated_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId, orderStatus, subtotal.toString(), gross.toString()]);
-    } else {
-      await client.query(`UPDATE app.sales_order SET fulfillment_status = $3, version = version + 1, updated_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId, orderStatus]);
-    }
+    await refreshOrderPreparation(client, input.organizationId, input.orderId);
     await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id)
       VALUES ($1, $2, $3, 'ORDER_ITEM_WEIGHED', $4::jsonb, $5)`, [randomUUID(), input.organizationId, input.orderId, JSON.stringify({ orderItemId: input.orderItemId, finalQty: finalQty.toString(), requiresApproval }), input.actorId]);
     return { finalTotalMinor: finalTotalMinor.toString(), requiresApproval };
@@ -234,6 +220,7 @@ export async function approveOrderItemAuthorized(pool: Pool, input: ApproveOrder
   uuid(input.orderItemId, "orderItemId");
   uuid(input.actorId, "actorId");
   return withMembershipTransaction(pool, input.organizationId, input.actorId, "OPERATOR", async client => {
+    await lockOrderForPreparation(client, input.organizationId, input.orderId);
     const updated = await client.query<{ finalTotalMinor: string }>(`UPDATE app.order_item
       SET status = 'RESOLVED', updated_at = now()
       WHERE organization_id = $1 AND order_id = $2 AND id = $3 AND status = 'WAITING_CUSTOMER_APPROVAL'
@@ -241,17 +228,7 @@ export async function approveOrderItemAuthorized(pool: Pool, input: ApproveOrder
     const item = updated.rows[0];
     if (!item) throw new ApiError(409, "CONFLICT", "Order item is not waiting for approval");
 
-    const unresolved = await client.query<{ count: string }>(`SELECT count(*) AS count FROM app.order_item
-      WHERE organization_id = $1 AND order_id = $2 AND status NOT IN ('RESOLVED','CANCELED')`, [input.organizationId, input.orderId]);
-    if (unresolved.rows[0]!.count === "0") {
-      const totals = await client.query<{ subtotal: string }>(`SELECT COALESCE(sum(final_total_minor), 0)::text AS subtotal FROM app.order_item WHERE organization_id = $1 AND order_id = $2`, [input.organizationId, input.orderId]);
-      const order = await client.query<{ delivery: string; discount: string }>(`SELECT delivery_fee_minor::text AS delivery, discount_minor::text AS discount FROM app.sales_order WHERE organization_id = $1 AND id = $2 FOR UPDATE`, [input.organizationId, input.orderId]);
-      const subtotal = BigInt(totals.rows[0]!.subtotal);
-      const gross = subtotal + BigInt(order.rows[0]!.delivery);
-      const discount = BigInt(order.rows[0]!.discount);
-      const finalTotal = gross - (discount > gross ? gross : discount);
-      await client.query(`UPDATE app.sales_order SET fulfillment_status = 'WEIGHT_ADJUSTED', final_subtotal_minor = $3, final_total_minor = $4, version = version + 1, updated_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId, subtotal.toString(), finalTotal.toString()]);
-    }
+    await refreshOrderPreparation(client, input.organizationId, input.orderId);
     await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id)
       VALUES ($1, $2, $3, 'ORDER_ITEM_APPROVED', $4::jsonb, $5)`, [randomUUID(), input.organizationId, input.orderId, JSON.stringify({ orderItemId: input.orderItemId }), input.actorId]);
     return { finalTotalMinor: item.finalTotalMinor };
