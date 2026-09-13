@@ -4,7 +4,8 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
-  | "PRECONDITION_REQUIRED";
+  | "PRECONDITION_REQUIRED"
+  | "INTERNAL_ERROR";
 
 export class ApiError extends Error {
   readonly status: number;
