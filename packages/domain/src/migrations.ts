@@ -37,9 +37,9 @@ export async function applyMigrations(pool: Pool, migrations: Migration[]): Prom
       }
       if (applied) continue;
 
-      // The original standalone foundation includes its own transaction envelope.
-      // Keep its checksum intact while allowing this runner to own the transaction.
-      const sql = migration.name === "0001_tenant_foundation.sql"
+      // Standalone migrations may carry an outer transaction envelope.
+      // Preserve their checksums while keeping the entire batch atomic.
+      const sql = /^\s*BEGIN;/i.test(migration.sql) && /COMMIT;\s*$/i.test(migration.sql)
         ? migration.sql.replace(/^\s*BEGIN;\s*/i, "").replace(/\s*COMMIT;\s*$/i, "")
         : migration.sql;
       await client.query(sql);

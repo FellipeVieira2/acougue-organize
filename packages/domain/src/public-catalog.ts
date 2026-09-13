@@ -4,6 +4,8 @@ import { ApiError } from "./api.ts";
 import { createTenantTransaction } from "./database.ts";
 import { parseInteger, positive, priceByGrams, priceByUnits, sumMinor } from "./quantities.ts";
 
+import { validateOfferQuantity } from "../../../lib/cart.ts";
+
 type PublicStore = { storeId: string; organizationId: string; storeName: string; storeSlug: string };
 type PublicOffer = {
   id: string; productId: string; productName: string; offerName: string; preparationName: string; sku: string;
@@ -84,6 +86,7 @@ export async function quotePublicCatalog(pool: Pool, slug: string, input: readon
         WHERE o.organization_id=$2 AND o.id=$3 AND o.active=true AND o.public_visible=true`, [store.storeId, store.organizationId, line.offerId]);
       const offer = result.rows[0];
       if (!offer) throw new ApiError(409, "CONFLICT", "Oferta indisponível ou sem preço atual.");
+      validateQuantity(offer, line.requestedQty);
       const total = offer.saleUnit === "G" ? priceByGrams(BigInt(offer.amountMinor), requestedQty) : priceByUnits(BigInt(offer.amountMinor), requestedQty);
       items.push({ offerId: offer.id, requestedQty: requestedQty.toString(), estimatedTotalMinor: total.toString(), amountMinor: offer.amountMinor, currency: offer.currency });
     }
@@ -91,6 +94,9 @@ export async function quotePublicCatalog(pool: Pool, slug: string, input: readon
     if (currencies.size !== 1) throw new ApiError(409, "CONFLICT", "As ofertas possuem moedas incompatíveis.");
     return { currency: items[0]!.currency, items, estimatedTotalMinor: sumMinor(items.map(item => BigInt(item.estimatedTotalMinor))).toString() };
   });
+}
+function validateQuantity(offer: PublicOffer, value: string): void {
+  try { validateOfferQuantity(offer, value); } catch (error) { throw new ApiError(400, "VALIDATION_ERROR", error instanceof Error ? error.message : "Quantidade inválida."); }
 }
 function requiredText(value: unknown, field: string, max: number): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > max) throw new ApiError(400, "VALIDATION_ERROR", `Invalid ${field}`);
@@ -127,7 +133,8 @@ export async function createPublicOrder(pool: Pool, slug: string, input: PublicC
   const customerPhone = requiredText(input.customerPhone, "customerPhone", 40);
   if (input.fulfillmentType !== "PICKUP" && input.fulfillmentType !== "DELIVERY") throw new ApiError(400, "VALIDATION_ERROR", "Tipo de atendimento inválido.");
   if (!/^[A-Z]{3}$/.test(input.currency)) throw new ApiError(400, "VALIDATION_ERROR", "Moeda inválida.");
-  const token = accessToken(secret, store.organizationId, input.idempotencyKey);
+  const scopedKey = hash(`${store.storeId}:${input.idempotencyKey}`);
+  const token = accessToken(secret, store.organizationId, scopedKey);
   const tokenHash = hash(token);
 
   return createTenantTransaction(pool)(store.organizationId, async client => {
@@ -136,8 +143,8 @@ export async function createPublicOrder(pool: Pool, slug: string, input: PublicC
       VALUES ($1, $2, $3, 'PUBLIC_ORDER_CREATE', $4, 201)
       ON CONFLICT (organization_id, idempotency_key, operation) DO NOTHING
       RETURNING id, request_hash AS "requestHash", order_id AS "orderId", public_number AS "publicNumber"`,
-      [randomUUID(), store.organizationId, input.idempotencyKey, input.requestHash]);
-    const record = idempotency.rows[0] ?? (await client.query<{ id: string; requestHash: string; orderId: string | null; publicNumber: string | null }>(`SELECT id, request_hash AS "requestHash", order_id AS "orderId", public_number AS "publicNumber" FROM app.idempotency_record WHERE organization_id=$1 AND idempotency_key=$2 AND operation='PUBLIC_ORDER_CREATE' FOR UPDATE`, [store.organizationId, input.idempotencyKey])).rows[0];
+      [randomUUID(), store.organizationId, scopedKey, input.requestHash]);
+    const record = idempotency.rows[0] ?? (await client.query<{ id: string; requestHash: string; orderId: string | null; publicNumber: string | null }>(`SELECT id, request_hash AS "requestHash", order_id AS "orderId", public_number AS "publicNumber" FROM app.idempotency_record WHERE organization_id=$1 AND idempotency_key=$2 AND operation='PUBLIC_ORDER_CREATE' FOR UPDATE`, [store.organizationId, scopedKey])).rows[0];
     if (!record) throw new ApiError(409, "CONFLICT", "Não foi possível reservar a chave idempotente.");
     if (record.requestHash !== input.requestHash) throw new ApiError(409, "CONFLICT", "A chave idempotente foi reutilizada com dados diferentes.");
     if (record.orderId && record.publicNumber) {
@@ -146,17 +153,23 @@ export async function createPublicOrder(pool: Pool, slug: string, input: PublicC
     }
 
     const ids = new Set<string>();
+    const offerIds = new Set<string>();
     const lines: Array<{ item: PublicCheckoutItem; inventoryItemId: string; productName: string; offerName: string; preparationName: string; sku: string; pricingType: string; unitPriceMinor: bigint; requestedQty: bigint; estimatedTotalMinor: bigint }> = [];
     for (const item of input.items) {
-      if (!item || typeof item !== "object" || !UUID.test(item.id) || !UUID.test(item.offerId) || ids.has(item.id)) throw new ApiError(400, "VALIDATION_ERROR", "Item inválido ou repetido.");
+      if (!item || typeof item !== "object" || !UUID.test(item.id) || !UUID.test(item.offerId) || ids.has(item.id) || offerIds.has(item.offerId)) throw new ApiError(400, "VALIDATION_ERROR", "Item inválido ou repetido.");
       ids.add(item.id);
+      offerIds.add(item.offerId);
       const requestedQty = quantity(item.requestedQty, "requestedQty");
-      const offer = (await client.query<{ inventoryItemId: string; productName: string; offerName: string; preparationName: string; sku: string; saleUnit: "G" | "UNIT" | "FIXED_PACKAGE"; amountMinor: string }>(`SELECT o.inventory_item_id AS "inventoryItemId", p.name AS "productName", o.sku AS "offerName", prep.name AS "preparationName", o.sku, o.sale_unit AS "saleUnit", pp.amount_minor::text AS "amountMinor"
+      const offer = (await client.query<PublicOffer & { inventoryItemId: string; baseUnit: string }>(`SELECT o.inventory_item_id AS "inventoryItemId", p.name AS "productName", o.sku AS "offerName", prep.name AS "preparationName", o.sku, o.sale_unit AS "saleUnit", pp.amount_minor::text AS "amountMinor", pp.currency, inv.base_unit AS "baseUnit", o.min_weight_g::text AS "minWeightG", o.max_weight_g::text AS "maxWeightG", o.weight_step_g::text AS "weightStepG"
         FROM app.catalog_offer o JOIN app.product p ON p.organization_id=o.organization_id AND p.id=o.product_id AND p.active=true
         JOIN app.preparation_option prep ON prep.organization_id=o.organization_id AND prep.id=o.preparation_option_id AND prep.active=true
-        JOIN LATERAL (SELECT amount_minor FROM app.product_price price WHERE price.organization_id=o.organization_id AND price.store_id=$1 AND price.product_id=o.product_id AND price.channel='STOREFRONT' ORDER BY revision DESC LIMIT 1) pp ON true
+        JOIN app.inventory_item inv ON inv.organization_id=o.organization_id AND inv.id=o.inventory_item_id AND inv.active=true
+        JOIN LATERAL (SELECT amount_minor,currency FROM app.product_price price WHERE price.organization_id=o.organization_id AND price.store_id=$1 AND price.product_id=o.product_id AND price.channel='STOREFRONT' ORDER BY revision DESC LIMIT 1) pp ON true
         WHERE o.organization_id=$2 AND o.id=$3 AND o.active=true AND o.public_visible=true`, [store.storeId, store.organizationId, item.offerId])).rows[0];
       if (!offer) throw new ApiError(409, "CONFLICT", "Uma oferta está indisponível ou sem preço atual.");
+      validateQuantity(offer, item.requestedQty);
+      if (offer.currency !== input.currency) throw new ApiError(409, "CONFLICT", "A moeda da oferta mudou. Atualize o carrinho.");
+      if (offer.baseUnit !== offer.saleUnit) throw new ApiError(409, "CONFLICT", "A unidade de estoque desta oferta é incompatível.");
       const pricingType = offer.saleUnit === "G" ? "PER_KG" : offer.saleUnit === "UNIT" ? "PER_UNIT" : "FIXED_PACKAGE";
       const unitPriceMinor = BigInt(offer.amountMinor);
       const estimatedTotalMinor = offer.saleUnit === "G" ? priceByGrams(unitPriceMinor, requestedQty) : priceByUnits(unitPriceMinor, requestedQty);

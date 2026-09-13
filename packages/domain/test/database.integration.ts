@@ -231,3 +231,37 @@ test('edição de produto bloqueia consulta e vínculo revogado sem alterar dado
     assert.equal((await client.query("SELECT id FROM app.audit_log WHERE action='product.updated'")).rowCount,0);
   });
 });
+
+test('checkout público valida peso e moeda, reserva uma vez e isola chaves por loja', async () => {
+  const { createPublicOrder, quotePublicCatalog, getPublicOrder } = await import('../src/public-catalog.ts');
+  process.env.ORDER_ACCESS_SECRET = 'local-test-only-secret-with-at-least-32-characters';
+  const inventory = randomUUID(), preparation = randomUUID(), offer = randomUUID(), secondStore = randomUUID();
+  const slug = `teste-${storeA}`, otherSlug = `teste-${secondStore}`;
+  await inTenant(tenantA, async client => {
+    await client.query("INSERT INTO app.store(id,organization_id,name,slug) VALUES ($1,$2,'Segunda loja',$3)", [secondStore,tenantA,otherSlug]);
+    await client.query("INSERT INTO app.inventory_item(id,organization_id,name,sku,base_unit) VALUES ($1,$2,'Patinho','INV-PUB','G')", [inventory,tenantA]);
+    await client.query("INSERT INTO app.preparation_option(id,organization_id,code,name) VALUES ($1,$2,'BIFE','Bife')", [preparation,tenantA]);
+    await client.query("INSERT INTO app.catalog_offer(id,organization_id,product_id,inventory_item_id,preparation_option_id,sku,sale_unit,min_weight_g,max_weight_g,weight_step_g,public_visible) VALUES ($1,$2,$3,$4,$5,'PUB','G',250,2000,125,true)",[offer,tenantA,productA,inventory,preparation]);
+    for (const store of [storeA, secondStore]) {
+      await client.query("INSERT INTO app.inventory_balance(id,organization_id,store_id,inventory_item_id,on_hand_qty) VALUES ($1,$2,$3,$4,5000)",[randomUUID(),tenantA,store,inventory]);
+      await client.query("INSERT INTO app.product_price(id,organization_id,store_id,product_id,channel,amount_minor,currency,revision) VALUES ($1,$2,$3,$4,'STOREFRONT',3790,'BRL',1)",[randomUUID(),tenantA,store,productA]);
+    }
+  });
+  const input = { idempotencyKey: randomUUID(), requestHash:'a'.repeat(64), orderId:randomUUID(), customerName:'Cliente de teste',customerPhone:'11999990000',fulfillmentType:'PICKUP' as const,currency:'BRL',items:[{id:randomUUID(),offerId:offer,requestedQty:'1375'}] };
+  assert.equal((await quotePublicCatalog(pool,slug,[{offerId:offer,requestedQty:'1375'}])).estimatedTotalMinor,'5211');
+  for (const requestedQty of ['249','300','2125']) {
+    await assert.rejects(quotePublicCatalog(pool,slug,[{offerId:offer,requestedQty}]), {status:400});
+    await assert.rejects(createPublicOrder(pool,slug,{...input,items:[{...input.items[0]!,requestedQty}]}), {status:400});
+  }
+  await assert.rejects(createPublicOrder(pool,slug,{...input,currency:'USD'}), {status:409});
+  const [created, retried] = await Promise.all([createPublicOrder(pool,slug,input), createPublicOrder(pool,slug,{...input,orderId:randomUUID()})]);
+  assert.deepEqual(created,retried);
+  assert.equal(created.estimatedTotalMinor,'5211');
+  assert.equal((await inTenant(tenantA,async client => (await client.query('SELECT reserved_qty::text AS qty FROM app.inventory_balance WHERE store_id=$1 AND inventory_item_id=$2',[storeA,inventory])).rows[0])).qty,'1375');
+  await assert.rejects(createPublicOrder(pool,slug,{...input,requestHash:'b'.repeat(64)}), {status:409});
+  const other = await createPublicOrder(pool,otherSlug,{...input,orderId:randomUUID(),items:[{...input.items[0]!,id:randomUUID()}]});
+  assert.notEqual(other.accessToken,created.accessToken);
+  await assert.rejects(getPublicOrder(pool,otherSlug,created.publicNumber,created.accessToken), {status:404});
+  assert.equal((await getPublicOrder(pool,slug,created.publicNumber,created.accessToken)).estimatedTotalMinor,'5211');
+  delete process.env.ORDER_ACCESS_SECRET;
+});

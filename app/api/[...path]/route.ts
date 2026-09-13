@@ -58,11 +58,11 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       const items = body.items.map(item => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) throw new ApiError(400, 'VALIDATION_ERROR', 'Item de pedido inválido.');
         const value = item as Record<string, unknown>;
-        return { id: randomUUID(), offerId: value.offerId as string, requestedQty: value.requestedQty as string, customerNote: value.customerNote as string | null | undefined };
+        return { id: randomUUID(), offerId: value.offerId as string, requestedQty: value.requestedQty as string, customerNote: (value.customerNote ?? null) as string | null };
       });
       return json(await createPublicOrder(database(), decodeURIComponent(publicOrderMatch[1]!), {
         idempotencyKey, requestHash, orderId: randomUUID(), customerName: body.customerName as string, customerPhone: body.customerPhone as string,
-        fulfillmentType: body.fulfillmentType as 'PICKUP' | 'DELIVERY', currency: body.currency as string, customerNote: body.customerNote as string | null | undefined, items,
+        fulfillmentType: body.fulfillmentType as 'PICKUP' | 'DELIVERY', currency: body.currency as string, customerNote: (body.customerNote ?? null) as string | null, items,
       }), 201);
     }
     if (request.method === 'POST') {
@@ -111,7 +111,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
           const requestedStoreId = typeof body.storeId === 'string' && /^[0-9a-f-]{36}$/i.test(body.storeId) ? body.storeId : null;
           const store = requestedStoreId
             ? (await client.query('SELECT id,name FROM app.store WHERE id=$1 AND organization_id=$2', [requestedStoreId, identity.organizationId])).rows[0]
-            : (await client.query('SELECT id,name FROM app.store WHERE active=true AND organization_id=$2 ORDER BY created_at,id LIMIT 1', [identity.organizationId])).rows[0];
+            : (await client.query('SELECT id,name FROM app.store WHERE active=true AND organization_id=$1 ORDER BY created_at,id LIMIT 1', [identity.organizationId])).rows[0];
           if (!store) throw new ApiError(409, 'CONFLICT', 'Cadastre uma loja ativa antes de incluir produtos.');
           const price = parseCreatePriceRequest({ id: randomUUID(), organizationId: identity.organizationId, storeId: store.id, productId: product.id, channel: 'POS', amountMinor: body.amountMinor, currency: 'BRL', revision: '1' });
           await client.query(`INSERT INTO app.product(id,organization_id,sku,name,stock_unit,sale_strategy) VALUES ($1,$2,$3,$4,$5,$6)`, [product.id, identity.organizationId, product.sku, product.name, product.stockUnit, product.saleStrategy]);

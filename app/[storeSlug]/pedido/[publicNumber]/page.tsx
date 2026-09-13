@@ -16,7 +16,7 @@ export default function OrderTracking({ params, searchParams }: { params: Promis
     const response = await fetch(`/api/public/stores/${encodeURIComponent(route.storeSlug)}/orders/${encodeURIComponent(route.publicNumber)}?token=${encodeURIComponent(query.token)}`, { cache: "no-store" })
     const body = await response.json()
     if (!response.ok) throw new Error(body.error?.message ?? "Pedido não encontrado.")
-    setState({ slug: route.storeSlug, order: body as Order, error: "", loading: false })
+    setState({ slug: route.storeSlug, token: query.token, order: body as Order, error: "", loading: false })
   }).catch(error => setState(current => ({ ...current, loading: false, error: error instanceof Error ? error.message : "Não foi possível consultar o pedido." }))) }, [params, searchParams])
 
   if (state.loading) return <main className="store-loading"><div className="store-loader"><span className="brand-mark"><Beef /></span><p>Consultando seu pedido...</p></div></main>

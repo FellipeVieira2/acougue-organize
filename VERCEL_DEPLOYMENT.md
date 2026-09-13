@@ -38,3 +38,9 @@ O painel carrega até 200 produtos. Métricas de produtos referem-se a esse conj
 Ainda pendentes: confirmação de e-mail, recuperação de senha, MFA, convites e seleção de múltiplas empresas, paginação completa, edição de preços, pedidos, estoque, caixa, pagamentos e billing. Antes de abrir um piloto público amplo, configure proteção de tráfego na Vercel e implemente verificação/recuperação de conta. O limite por e-mail não substitui proteção por origem de tráfego. Sessões e contadores expirados exigem rotina posterior de limpeza.
 
 Referências: [Deploy de Next.js](https://nextjs.org/docs/app/getting-started/deploying), [Node.js na Vercel](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions).
+
+### Pedidos públicos
+
+Configure `ORDER_ACCESS_SECRET` no servidor com um valor aleatório de pelo menos 32 caracteres, separado entre produção e preview. Nunca publique esse valor em variáveis `NEXT_PUBLIC`. A criação pública retorna indisponibilidade enquanto ele não estiver configurado; mantenha-o estável para reenvios idempotentes. Também são necessárias as migrações até `0008_guest_checkout.sql`.
+
+Antes de migrar uma instalação antiga sem histórico em `schema_migrations`, confira o esquema já existente e prepare a linha de base; não tente recriar tabelas nem registrar checksums sem comparar as definições. Use o executor corrigido para as novas migrações: ele mantém todo o lote em uma transação.

@@ -44,3 +44,25 @@ O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele
 Antes de uma nova alteração, atualize a partir da main. A PR #3 foi encerrada porque sua implementação foi incorporada à consolidação. Preserve lib/auth.ts, lib/web.ts, os testes e as validações de sessão nas rotas. A interface não deve escolher empresa, ator ou permissões por cabeçalhos ou variáveis NEXT_PUBLIC. Nunca restaure a antiga consulta de dashboard sem sessão.
 
 A PR #3 continha a base anterior de autenticação. Esta integração parte da main mais recente e incorpora essa base; não sobreponha o painel da v0 com a interface antiga daquela etapa.
+
+## Validação e correções do checkout — 13/09/2026
+
+Revisão sobre a main 06ae7c7, preservando as telas recentes da v0:
+
+- Corrigida a estimativa 100 vezes maior no carrinho e checkout; cálculo por linha em centavos inteiros com o mesmo arredondamento do servidor.
+- Implementada cotação atualizada ao abrir o checkout, com envio bloqueado até a resposta e erro explícito em caso de indisponibilidade.
+- Peso mínimo, máximo e incremento validados na cotação e na criação do pedido; moeda comparada ao preço vigente e unidade comparada ao estoque físico.
+- Reenvios do mesmo formulário reutilizam a chave idempotente. Chaves e tokens agora incluem a loja, evitando colisões entre lojas da mesma empresa.
+- Embalagens fixas ficam indisponíveis no checkout até existir conversão explícita entre embalagem e unidade física de estoque.
+- Corrigidos erros de compilação no acompanhamento público, seletor de loja e dados opcionais; corrigido parâmetro SQL no cadastro de produto sem loja explícita.
+- Executor de migrações remove o envelope externo BEGIN/COMMIT de todas as migrações que o possuem, mantendo checksums originais e atomicidade do lote inteiro. `.gitattributes` padroniza SQL em LF entre Windows e Vercel.
+
+Evidências desta revisão: build de produção e TypeScript aprovados; 15 testes com PostgreSQL 17 aprovados, incluindo instalação concorrente, rollback do lote e checkout público concorrente com reserva única; fluxo HTTP de cadastro, catálogo, isolamento e logout aprovado. Carrinho e cotação conferidos no navegador local: 250 g a R$ 37,90/kg resulta em R$ 9,48.
+
+Pendências prioritárias antes de operar o cardápio em produção:
+
+1. Concluir a atualização e validação do banco remoto (migrações 1–8), conexão de aplicação com privilégios restritos e configuração de APP_URL/ORDER_ACCESS_SECRET. A revisão local não confirma essa ativação.
+2. Completar telas de cadastro/publicação de ofertas e movimentos de estoque, pesagem, entrega/retirada, cancelamento e conclusão.
+3. Revisar concorrência entre pesagem/aprovação de itens: serializar pelo pedido antes de recalcular totais e impedir operações em pedidos terminais; testar aprovação de múltiplos itens e excluir cancelados dos totais.
+4. Implementar endereço/taxa para entrega, política de aprovação de alteração de preço entre cotação e envio, expiração/liberação de reservas abandonadas e limitação de pedidos públicos.
+5. Cobrir ponta a ponta todos os fluxos públicos, incluindo falhas de rede, alteração de preços, aprovação e consumo de estoque. As funções existentes de pesagem/aprovação ainda não equivalem a fluxo operacional completo validado.
