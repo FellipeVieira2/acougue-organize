@@ -27,7 +27,7 @@ Em um ambiente administrativo, defina `DATABASE_MIGRATION_URL` e execute `pnpm d
 - `DATABASE_TEST_URL=... pnpm test:integration`: banco efêmero vazio com nome terminado em `_test`; requer cluster sem a role de teste preexistente.
 - `APP_TEST_URL=http://localhost:3000 pnpm test:http`: fluxo HTTP contra servidor local com banco de teste já preparado e ALLOW_SIGNUP=true. Não aponta a um deployment ou banco real.
 
-Foram validados localmente 32 testes unitários, 13 de PostgreSQL e um fluxo HTTP completo, além do build de produção. Cadastro e inclusão de produto conferidos pelo navegador local. A evidência local não significa deploy remoto já concluído.
+Foram validados localmente 33 testes unitários, 14 de PostgreSQL e um fluxo HTTP completo, além do build de produção. Cadastro e inclusão de produto conferidos pelo navegador local. A evidência local não significa deploy remoto já concluído.
 
 ## Escopo funcional
 

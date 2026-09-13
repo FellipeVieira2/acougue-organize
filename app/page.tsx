@@ -28,9 +28,9 @@ export default function Home() {
   const [message, setMessage] = useState("")
   const [signingOut, setSigningOut] = useState(false)
   const { data, error, isLoading, isValidating, mutate } = useSWR<DashboardData, HttpError>("/api/dashboard", api, { shouldRetryOnError: false })
-  if (error?.status === 401) return <Access onSuccess={async () => { setSearch(""); setCreating(false); setEditing(null); await mutate() }} />
-  if (!data) return <main className="access-shell"><section className="access-card"><Brand /><h1>{isLoading ? "Abrindo sua operação…" : "Não foi possível abrir o painel"}</h1>{error && <><p role="alert">O serviço está indisponível no momento. Tente novamente em alguns instantes.</p><button className="primary-button" onClick={() => void mutate()}>Tentar novamente</button></>}</section></main>
+  if (error?.status === 401) return <Access onSuccess={async () => { setSearch(""); setStatus("all"); setMessage(""); setCreating(false); setEditing(null); await mutate() }} />
   if (error?.status === 403) return <main className="access-shell"><section className="access-card"><Brand /><h1>Acesso indisponível</h1><p>Seu acesso a esta empresa não está ativo.</p><button className="primary-button" onClick={() => void api("/api/auth/logout", {}).then(() => mutate(undefined)).catch(() => setMessage("Não foi possível sair. Tente novamente."))}>Sair</button><p role="alert">{message}</p></section></main>
+  if (!data) return <main className="access-shell"><section className="access-card"><Brand /><h1>{isLoading ? "Abrindo sua operação…" : "Não foi possível abrir o painel"}</h1>{error && <><p role="alert">O serviço está indisponível no momento. Tente novamente em alguns instantes.</p><button className="primary-button" onClick={() => void mutate()}>Tentar novamente</button></>}</section></main>
   const products = data.products.filter(product => `${product.name} ${product.sku}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")) && (status === "all" || product.active === (status === "active")))
   const initials = data.email.slice(0, 2).toUpperCase()
   async function signOut() {

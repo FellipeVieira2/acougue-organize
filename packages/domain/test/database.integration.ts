@@ -215,3 +215,19 @@ test('cadastro web é atômico, usa senha derivada e sessão revogável', async 
   await pool.query('UPDATE identity.login_limit SET attempts=10 WHERE key_hash=$1', [digest(email)]);
   await assert.rejects(login(pool, { email, password }), /Muitas tentativas/);
 });
+
+test('edição de produto bloqueia consulta e vínculo revogado sem alterar dados ou auditoria', async () => {
+  const { updateProduct } = await import('../../../lib/products.ts');
+  const organizationId=randomUUID(), owner=randomUUID(), viewer=randomUUID(), id=randomUUID();
+  await createOrganizationWithStore(pool, { organizationId, actorId:owner, storeId:randomUUID(), auditId:randomUUID(), correlationId:randomUUID(), name:'Permissão de edição', storeName:'Matriz', storeSlug:`edit-${organizationId}` });
+  await createProductAuthorized(pool,owner,{id,organizationId,sku:'EDIT',name:'Original',stockUnit:'UNIT',saleStrategy:'UNIT'});
+  await addMembership(pool,owner,{organizationId,actorId:viewer,role:'VIEWER',status:'ACTIVE'},randomUUID(),randomUUID());
+  const changes={name:'Alterado',active:false,expectedVersion:'1'};
+  await assert.rejects(updateProduct(pool,{organizationId,actorId:viewer,email:'viewer@example.test'},id,changes,randomUUID()),/FORBIDDEN/);
+  await inTenant(organizationId,async client => { await client.query("UPDATE app.organization_membership SET status='REVOKED' WHERE actor_id=$1",[owner]); });
+  await assert.rejects(updateProduct(pool,{organizationId,actorId:owner,email:'owner@example.test'},id,changes,randomUUID()),/FORBIDDEN/);
+  await inTenant(organizationId,async client => {
+    assert.deepEqual((await client.query('SELECT name,active,version FROM app.product WHERE id=$1',[id])).rows[0],{name:'Original',active:true,version:'1'});
+    assert.equal((await client.query("SELECT id FROM app.audit_log WHERE action='product.updated'")).rowCount,0);
+  });
+});
