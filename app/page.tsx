@@ -1,5 +1,6 @@
 "use client"
 
+import useSWR from "swr"
 import { useMemo, useState } from "react"
 import { ArrowUpRight, Beef, Boxes, CircleHelp, LayoutDashboard, Menu, PackagePlus, Settings2, Store, Users, X } from "lucide-react"
 
@@ -10,18 +11,24 @@ const navItems = [
   { label: "Lojas", icon: Store },
 ]
 
-const products = [
-  { name: "Picanha premium", sku: "BOV-001", unit: "kg", price: "R$ 89,90", status: "Ativo" },
-  { name: "Coxão mole", sku: "BOV-014", unit: "kg", price: "R$ 49,90", status: "Ativo" },
-  { name: "Linguiça artesanal", sku: "SUÍ-021", unit: "kg", price: "R$ 32,50", status: "Ativo" },
-  { name: "Kit churrasco família", sku: "KIT-004", unit: "un", price: "R$ 119,90", status: "Rascunho" },
-]
+type DashboardProduct = { name: string; sku: string; stock_unit: string; active: boolean; amountMinor: string | null; currency: string | null }
+type DashboardData = { organization: { name: string; status: string } | null; stores: { id: string; name: string; active: boolean }[]; products: DashboardProduct[]; activity: { action: string; reason: string | null; created_at: string }[] }
+
+const fetcher = (url: string) => fetch(url).then((response) => {
+  if (!response.ok) throw new Error("Não foi possível carregar os dados")
+  return response.json() as Promise<DashboardData>
+})
+
+const organizationId = process.env.NEXT_PUBLIC_ORGANIZATION_ID
 
 export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [active, setActive] = useState("Visão geral")
   const [search, setSearch] = useState("")
-  const filteredProducts = useMemo(() => products.filter((product) => `${product.name} ${product.sku}`.toLowerCase().includes(search.toLowerCase())), [search])
+  const { data, error, isLoading } = useSWR<DashboardData>(organizationId ? "/api/dashboard" : null, fetcher)
+  const products = data?.products ?? []
+  const filteredProducts = useMemo(() => products.filter((product) => `${product.name} ${product.sku}`.toLowerCase().includes(search.toLowerCase())), [products, search])
+  const formatPrice = (product: DashboardProduct) => product.amountMinor ? new Intl.NumberFormat("pt-BR", { style: "currency", currency: product.currency ?? "BRL" }).format(Number(product.amountMinor) / 100) : "Sem preço"
 
   return (
     <main className="app-shell">
@@ -41,10 +48,12 @@ export default function Home() {
       <section className="main-content">
         <header className="topbar"><button className="mobile-menu" aria-label="Abrir menu" onClick={() => setMenuOpen(true)}>{menuOpen ? <X /> : <Menu />}</button><div className="breadcrumbs"><span>Operação</span><b>/</b><strong>{active}</strong></div><div className="topbar-actions"><span className="status-dot" /> Sincronizado <span className="topbar-divider" /><button className="topbar-icon" aria-label="Abrir ajuda"><CircleHelp /></button><span className="top-avatar">FC</span></div></header>
         <div className="content-wrap">
-          <div className="page-heading"><div><p className="eyebrow">TERÇA-FEIRA, 12 DE SETEMBRO DE 2026</p><h1>Bom dia, Felipe.</h1><p className="heading-copy">Aqui está o resumo da sua operação hoje.</p></div><button className="primary-button" onClick={() => setActive("Catálogo")}><PackagePlus /> Novo produto</button></div>
-          <div className="metric-grid"><Metric label="Produtos ativos" value="128" detail="+12%" detailCopy="vs. mês anterior" tone="green" /><Metric label="Estoque baixo" value="07" detail="Atenção" detailCopy="itens precisam de reposição" tone="orange" /><Metric label="Vendas hoje" value="R$ 8.420" detail="+8,4%" detailCopy="vs. ontem" tone="green" /><Metric label="Pedidos em aberto" value="24" detail="03 urgentes" detailCopy="aguardando produção" tone="purple" /></div>
+          <div className="page-heading"><div><p className="eyebrow">TERÇA-FEIRA, 12 DE SETEMBRO DE 2026</p><h1>Bom dia, Felipe.</h1><p className="heading-copy">{data?.organization ? `Resumo de ${data.organization.name}.` : "Conecte uma organização para visualizar os dados reais."}</p></div><button className="primary-button" onClick={() => setActive("Catálogo")}><PackagePlus /> Novo produto</button></div>
+          {isLoading && <div className="status-banner">Carregando dados do PostgreSQL...</div>}
+          {error && <div className="status-banner">Configure `NEXT_PUBLIC_ORGANIZATION_ID` com o UUID da organização para carregar o catálogo.</div>}
+          <div className="metric-grid"><Metric label="Produtos ativos" value={data ? String(data.products.filter((product) => product.active).length).padStart(2, "0") : "—"} detail={data ? "Banco conectado" : "Aguardando"} detailCopy="catálogo do tenant" tone="green" /><Metric label="Lojas ativas" value={data ? String(data.stores.filter((store) => store.active).length).padStart(2, "0") : "—"} detail="Operação" detailCopy="lojas disponíveis" tone="orange" /><Metric label="Preços carregados" value={data ? String(data.products.filter((product) => product.amountMinor !== null).length).padStart(2, "0") : "—"} detail="POS" detailCopy="preços publicados" tone="green" /><Metric label="Atividade recente" value={data ? String(data.activity.length).padStart(2, "0") : "—"} detail="Auditoria" detailCopy="últimos eventos" tone="purple" /></div>
           <div className="section-heading"><div><h2>Catálogo de produtos</h2><p>Gerencie os itens disponíveis nas suas lojas.</p></div><button className="text-button" onClick={() => setActive("Catálogo")}>Ver catálogo <ArrowUpRight /></button></div>
-          <div className="table-card"><div className="table-toolbar"><div className="search-field"><span>⌕</span><input aria-label="Buscar produto" placeholder="Buscar por nome ou SKU" value={search} onChange={(event) => setSearch(event.target.value)} /></div><button className="filter-button">Todos os status <span>⌄</span></button></div><div className="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Unidade</th><th>Preço atual</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filteredProducts.map((product) => <tr key={product.sku}><td><span className="product-icon"><Beef /></span><strong>{product.name}</strong></td><td className="muted">{product.sku}</td><td className="muted">{product.unit}</td><td>{product.price}</td><td><span className={product.status === "Ativo" ? "badge badge-green" : "badge badge-gray"}>{product.status}</span></td><td><button className="row-more" aria-label={`Mais ações para ${product.name}`}>•••</button></td></tr>)}</tbody></table></div></div>
+          <div className="table-card"><div className="table-toolbar"><div className="search-field"><span>⌕</span><input aria-label="Buscar produto" placeholder="Buscar por nome ou SKU" value={search} onChange={(event) => setSearch(event.target.value)} /></div><button className="filter-button">Todos os status <span>⌄</span></button></div><div className="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Unidade</th><th>Preço atual</th><th>Status</th><th><span className="sr-only">Ações</span></th></tr></thead><tbody>{filteredProducts.map((product) => <tr key={product.sku}><td><span className="product-icon"><Beef /></span><strong>{product.name}</strong></td><td className="muted">{product.sku}</td><td className="muted">{product.stock_unit === "G" ? "kg" : "un"}</td><td>{formatPrice(product)}</td><td><span className={product.active ? "badge badge-green" : "badge badge-gray"}>{product.active ? "Ativo" : "Inativo"}</span></td><td><button className="row-more" aria-label={`Mais ações para ${product.name}`}>•••</button></td></tr>)}</tbody></table></div></div>
           <div className="bottom-grid"><div className="insight-card"><div className="insight-icon"><Boxes /></div><div><h3>Estoque merece atenção</h3><p>7 produtos estão abaixo do estoque mínimo configurado.</p></div><button className="arrow-button" aria-label="Ver estoque"><ArrowUpRight /></button></div><div className="activity-card"><div className="activity-head"><h3>Atividade recente</h3><button className="text-button">Ver tudo</button></div><Activity text="Preço atualizado" item="Picanha premium" time="há 12 min" /><Activity text="Produto cadastrado" item="Kit churrasco família" time="há 1 h" /></div></div>
         </div>
       </section>
