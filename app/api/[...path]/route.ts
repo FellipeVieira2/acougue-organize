@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server.js';
+import { updateProduct } from '../../../lib/products.ts';
 import { randomUUID } from 'node:crypto';
 import { ApiError, apiErrorResponse, parseCreateProductRequest, parseCreatePriceRequest } from '../../../packages/domain/src/api.ts';
 import { withMembershipTransaction } from '../../../packages/domain/src/membership.ts';
@@ -38,6 +39,8 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       }
       const identity = await session(database(), token);
       if (!identity) throw new ApiError(401, 'UNAUTHORIZED', 'Entre para continuar.');
+      const productMatch = /^\/api\/products\/([^/]+)$/.exec(path);
+      if (productMatch) return json(await updateProduct(database(), identity, productMatch[1]!, body, requestId));
       if (path === '/api/products') {
         strictBody(body, ['name', 'sku', 'stockUnit', 'amountMinor']);
         const product = parseCreateProductRequest({ id: randomUUID(), organizationId: identity.organizationId, name: body.name, sku: body.sku, stockUnit: body.stockUnit, saleStrategy: body.stockUnit === 'UNIT' ? 'UNIT' : 'WEIGHT_FREE' });

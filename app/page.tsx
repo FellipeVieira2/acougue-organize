@@ -6,7 +6,7 @@ import { ArrowUpRight, Beef, Boxes, LayoutDashboard, Menu, PackagePlus, Store, X
 import { formatBRL, priceToMinor } from "../lib/money.ts"
 
 const navItems = [{ label: "Visão geral", icon: LayoutDashboard }, { label: "Catálogo", icon: Beef }, { label: "Estoque", icon: Boxes }, { label: "Lojas", icon: Store }]
-type DashboardProduct = { id: string; name: string; sku: string; stock_unit: string; active: boolean; amountMinor: string | null }
+type DashboardProduct = { id: string; name: string; sku: string; stock_unit: string; active: boolean; version: string; amountMinor: string | null }
 type DashboardData = { organization: { name: string; status: string }; email: string; role: string; canCreateProduct: boolean; priceStore: string | null; hasMore: boolean; stores: { id: string; name: string; active: boolean }[]; products: DashboardProduct[]; activity: { id: string; action: string; reason: string | null; created_at: string }[] }
 class HttpError extends Error { readonly status: number; constructor(message: string, status: number) { super(message); this.status = status } }
 async function api(url: string, body?: unknown) {
@@ -16,7 +16,7 @@ async function api(url: string, body?: unknown) {
   return result
 }
 const roleLabels: Record<string, string> = { OWNER: "Proprietário", ADMIN: "Administrador", MANAGER: "Gerente", OPERATOR: "Operador", VIEWER: "Consulta" }
-const actionLabels: Record<string, string> = { "organization.created": "Empresa cadastrada", "product.created": "Produto cadastrado", "membership.created": "Membro adicionado" }
+const actionLabels: Record<string, string> = { "organization.created": "Empresa cadastrada", "product.created": "Produto cadastrado", "product.updated": "Produto atualizado", "membership.created": "Membro adicionado" }
 
 export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -24,17 +24,18 @@ export default function Home() {
   const [search, setSearch] = useState("")
   const [status, setStatus] = useState("all")
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<DashboardProduct | null>(null)
   const [message, setMessage] = useState("")
   const [signingOut, setSigningOut] = useState(false)
   const { data, error, isLoading, isValidating, mutate } = useSWR<DashboardData, HttpError>("/api/dashboard", api, { shouldRetryOnError: false })
-  if (error?.status === 401) return <Access onSuccess={async () => { setSearch(""); setCreating(false); await mutate() }} />
+  if (error?.status === 401) return <Access onSuccess={async () => { setSearch(""); setCreating(false); setEditing(null); await mutate() }} />
   if (!data) return <main className="access-shell"><section className="access-card"><Brand /><h1>{isLoading ? "Abrindo sua operação…" : "Não foi possível abrir o painel"}</h1>{error && <><p role="alert">O serviço está indisponível no momento. Tente novamente em alguns instantes.</p><button className="primary-button" onClick={() => void mutate()}>Tentar novamente</button></>}</section></main>
   if (error?.status === 403) return <main className="access-shell"><section className="access-card"><Brand /><h1>Acesso indisponível</h1><p>Seu acesso a esta empresa não está ativo.</p><button className="primary-button" onClick={() => void api("/api/auth/logout", {}).then(() => mutate(undefined)).catch(() => setMessage("Não foi possível sair. Tente novamente."))}>Sair</button><p role="alert">{message}</p></section></main>
   const products = data.products.filter(product => `${product.name} ${product.sku}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")) && (status === "all" || product.active === (status === "active")))
   const initials = data.email.slice(0, 2).toUpperCase()
   async function signOut() {
     setSigningOut(true)
-    try { await api("/api/auth/logout", {}); setCreating(false); await mutate(undefined) }
+    try { await api("/api/auth/logout", {}); setCreating(false); setEditing(null); await mutate(undefined) }
     catch { setMessage("Não foi possível sair. Tente novamente.") }
     finally { setSigningOut(false) }
   }
@@ -48,15 +49,16 @@ export default function Home() {
     <section className="main-content">
       <header className="topbar"><button className="mobile-menu" aria-label="Abrir menu" onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? <X /> : <Menu />}</button><div className="breadcrumbs"><span>Operação</span><b>/</b><strong>{active}</strong></div><div className="topbar-actions"><span className="status-dot" />{error ? "Atualização pendente" : isValidating ? "Atualizando…" : "Atualizado"}<span className="topbar-divider" /><span className="top-avatar">{initials}</span></div></header>
       <div className="content-wrap">
-        <div className="page-heading"><div><p className="eyebrow">SUA OPERAÇÃO, EM UM SÓ LUGAR</p><h1>{active === "Visão geral" ? "Visão geral da operação" : active}</h1><p className="heading-copy">{data.organization.name}</p></div>{data.canCreateProduct && <button className="primary-button" onClick={() => { setActive("Catálogo"); setCreating(true); setMessage("") }}><PackagePlus />Novo produto</button>}</div>
+        <div className="page-heading"><div><p className="eyebrow">SUA OPERAÇÃO, EM UM SÓ LUGAR</p><h1>{active === "Visão geral" ? "Visão geral da operação" : active}</h1><p className="heading-copy">{data.organization.name}</p></div>{data.canCreateProduct && <button className="primary-button" onClick={() => { setActive("Catálogo"); setCreating(true); setEditing(null); setMessage("") }}><PackagePlus />Novo produto</button>}</div>
         {error && <div className="status-banner" role="alert">Não foi possível atualizar os dados. <button className="text-button" onClick={() => void mutate()}>Tentar novamente</button></div>}
         {message && <div className="status-banner" role="status">{message}</div>}
         {active === "Estoque" ? <section className="table-card empty-state"><Boxes /><h2>Controle de estoque em preparação</h2><p>Movimentações, saldos e alertas estarão disponíveis em uma próxima etapa.</p></section> : active === "Lojas" ? <section className="table-card"><div className="section-heading"><h2>Suas lojas</h2></div>{data.stores.map(store => <div className="activity-row" key={store.id}><Store /><strong>{store.name}</strong><span className={store.active ? "badge badge-green" : "badge badge-gray"}>{store.active ? "Ativa" : "Inativa"}</span></div>)}</section> : <>
           {active === "Visão geral" && <div className="metric-grid"><Metric label="Produtos carregados" value={String(data.products.length)} detail={data.hasMore ? "Primeiros 200" : "Catálogo"} /><Metric label="Lojas ativas" value={String(data.stores.filter(store => store.active).length)} detail="Operação" /><Metric label="Produtos com preço" value={String(data.products.filter(product => product.amountMinor !== null).length)} detail={data.priceStore ?? "Sem loja ativa"} /><Metric label="Eventos recentes" value={String(data.activity.length)} detail="Até 5 registros" /></div>}
+          {editing && <EditProduct key={`${editing.id}:${editing.version}`} product={editing} onCancel={() => setEditing(null)} onReload={async () => { const fresh = await mutate(); const current = fresh?.products.find(product => product.id === editing.id); if (current) setEditing(current); else { setEditing(null); setMessage("Produto indisponível. Atualize a busca.") } }} onSuccess={async () => { setEditing(null); setMessage("Produto atualizado com sucesso."); await mutate() }} />}
           {creating && <ProductForm storeName={data.priceStore} onCancel={() => setCreating(false)} onSuccess={async () => { setCreating(false); setMessage("Produto cadastrado com sucesso."); await mutate() }} />}
           <div className="section-heading"><div><h2>Catálogo de produtos</h2><p>Preços de venda em {data.priceStore ?? "uma loja ativa"}. Produtos pesáveis têm preço por kg.</p></div>{active === "Visão geral" && <button className="text-button" onClick={() => setActive("Catálogo")}>Ver catálogo <ArrowUpRight /></button>}</div>
           {data.hasMore && <div className="status-banner">Mostrando os 200 produtos mais recentes. A busca considera apenas esses produtos.</div>}
-          <div className="table-card"><div className="table-toolbar"><div className="search-field"><span>⌕</span><input aria-label="Buscar produto" placeholder="Buscar por nome ou SKU" value={search} onChange={event => setSearch(event.target.value)} /></div><select className="filter-button" aria-label="Filtrar por status" value={status} onChange={event => setStatus(event.target.value)}><option value="all">Todos os status</option><option value="active">Ativos</option><option value="inactive">Inativos</option></select></div><div className="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Unidade de venda</th><th>Preço atual</th><th>Status</th></tr></thead><tbody>{products.map(product => <tr key={product.id}><td><span className="product-icon"><Beef /></span><strong>{product.name}</strong></td><td className="muted">{product.sku}</td><td className="muted">{product.stock_unit === "G" ? "kg" : "un"}</td><td>{formatBRL(product.amountMinor)}</td><td><span className={product.active ? "badge badge-green" : "badge badge-gray"}>{product.active ? "Ativo" : "Inativo"}</span></td></tr>)}</tbody></table>{products.length === 0 && <p className="empty-state">{search || status !== "all" ? "Nenhum produto encontrado para esse filtro." : "Seu catálogo está vazio. Cadastre o primeiro produto para começar."}</p>}</div></div>
+          <div className="table-card"><div className="table-toolbar"><div className="search-field"><span>⌕</span><input aria-label="Buscar produto" placeholder="Buscar por nome ou SKU" value={search} onChange={event => setSearch(event.target.value)} /></div><select className="filter-button" aria-label="Filtrar por status" value={status} onChange={event => setStatus(event.target.value)}><option value="all">Todos os status</option><option value="active">Ativos</option><option value="inactive">Inativos</option></select></div><div className="table-wrap"><table><thead><tr><th>Produto</th><th>SKU</th><th>Unidade de venda</th><th>Preço atual</th><th>Status</th>{data.canCreateProduct && <th><span className="sr-only">Ações</span></th>}</tr></thead><tbody>{products.map(product => <tr key={product.id}><td><span className="product-icon"><Beef /></span><strong>{product.name}</strong></td><td className="muted">{product.sku}</td><td className="muted">{product.stock_unit === "G" ? "kg" : "un"}</td><td>{formatBRL(product.amountMinor)}</td><td><span className={product.active ? "badge badge-green" : "badge badge-gray"}>{product.active ? "Ativo" : "Inativo"}</span></td>{data.canCreateProduct && <td><button className="text-button" aria-label={`Editar ${product.name}`} onClick={() => { setEditing(product); setCreating(false); setMessage("") }}>Editar</button></td>}</tr>)}</tbody></table>{products.length === 0 && <p className="empty-state">{search || status !== "all" ? "Nenhum produto encontrado para esse filtro." : "Seu catálogo está vazio. Cadastre o primeiro produto para começar."}</p>}</div></div>
           {active === "Visão geral" && <div className="bottom-grid"><div className="insight-card"><div className="insight-icon"><Boxes /></div><div><h3>Organize seu catálogo</h3><p>Cadastre produtos e preços para preparar sua operação.</p></div></div><div className="activity-card"><div className="activity-head"><h3>Atividade recente</h3></div>{data.activity.length === 0 && <p>Nenhuma atividade registrada.</p>}{data.activity.map(event => <div className="activity-row" key={event.id}><span className="activity-dot" /><div><strong>{actionLabels[event.action] ?? "Alteração registrada"}</strong></div><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" })}</time></div>)}</div></div>}
         </>}
       </div>
@@ -86,4 +88,20 @@ function ProductForm({ onSuccess, onCancel, storeName }: { onSuccess: () => Prom
     finally { setBusy(false) }
   }
   return <section className="table-card product-editor" aria-labelledby="new-product-title"><h2 id="new-product-title">Novo produto</h2><p>Preço inicial para {storeName ?? "sua loja"}.</p><form className="editor-form product-fields" onSubmit={event => void submit(event)}><label>Nome<input name="name" required maxLength={200} autoFocus /></label><label>SKU<input name="sku" required maxLength={80} /></label><label>Venda por<select name="stockUnit" value={unit} onChange={event => setUnit(event.target.value)}><option value="G">Quilo (kg)</option><option value="UNIT">Unidade</option></select></label><label>Preço por {unit === "G" ? "kg" : "unidade"} (R$)<input name="price" required inputMode="decimal" placeholder="39,90" maxLength={19} /></label>{error && <p className="form-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="filter-button" disabled={busy} onClick={onCancel}>Cancelar</button><button className="primary-button" disabled={busy || !storeName}>{busy ? "Salvando…" : "Salvar produto"}</button></div></form></section>
+}
+
+function EditProduct({ product, onSuccess, onCancel, onReload }: { product: DashboardProduct; onSuccess: () => Promise<void>; onCancel: () => void; onReload: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [conflict, setConflict] = useState(false)
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError("")
+    const fields = new FormData(event.currentTarget)
+    try { await api(`/api/products/${product.id}`, { name: fields.get("name"), active: fields.get("active") === "true", expectedVersion: product.version }); await onSuccess() }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Não foi possível salvar."); setConflict(failure instanceof HttpError && failure.status === 409) }
+    finally { setBusy(false) }
+  }
+  async function reload() {
+    setBusy(true)
+    try { await onReload() } catch { setError("Não foi possível recarregar. Tente novamente.") } finally { setBusy(false) }
+  }
+  return <section className="table-card product-editor" aria-labelledby="edit-product-title"><h2 id="edit-product-title">Editar produto</h2><p>SKU: {product.sku}. O preço atual será mantido.</p><form className="editor-form product-fields" onSubmit={event => void submit(event)}><label>Nome<input name="name" defaultValue={product.name} required maxLength={200} autoFocus /></label><label>Status<select name="active" defaultValue={String(product.active)}><option value="true">Ativo</option><option value="false">Inativo</option></select></label><small>Inativar mantém o produto e seu histórico no catálogo.</small>{error && <p className="form-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="filter-button" disabled={busy} onClick={onCancel}>Cancelar</button>{conflict && <button type="button" className="filter-button" disabled={busy} onClick={() => void reload()}>Recarregar dados</button>}<button className="primary-button" disabled={busy || conflict}>{busy ? "Salvando…" : "Salvar alterações"}</button></div></form></section>
 }

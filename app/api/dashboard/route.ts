@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       const stores = (await client.query('SELECT id,name,active FROM app.store ORDER BY created_at,id')).rows;
       const priceStore = stores.find(store => store.active);
       const products = (await client.query(`
-        SELECT p.id,p.name,p.sku,p.stock_unit,p.active,price.amount_minor AS "amountMinor",price.currency
+        SELECT p.id,p.name,p.sku,p.stock_unit,p.active,p.version,price.amount_minor AS "amountMinor",price.currency
         FROM app.product p LEFT JOIN LATERAL (
           SELECT amount_minor,currency FROM app.product_price pp
           WHERE pp.product_id=p.id AND pp.store_id=$1 AND pp.channel='POS'
