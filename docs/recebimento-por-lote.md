@@ -1,6 +1,7 @@
 # Recebimento por lote — próxima entrega
 
 Estado: critérios definidos; funcionalidade ainda não implementada.
+Validação inicial de quantidade e custo disponível em `packages/domain/src/receiving.ts`, com testes. Ainda não conectada a uma rota, tela ou gravação no banco.
 
 O operador registra a entrada de uma mercadoria em uma loja. O recebimento cria o lote e aumenta o estoque disponível na mesma transação.
 

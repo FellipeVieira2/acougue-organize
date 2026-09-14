@@ -1,4 +1,5 @@
 export * from './quantities.ts';
+export * from './receiving.ts';
 export * from './orders.ts';
 export * from './ordering.ts';
 export * from './public-catalog.ts';
