@@ -28,7 +28,7 @@ export function normalizeEmail(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
-async function identityTransaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function identityTransaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
