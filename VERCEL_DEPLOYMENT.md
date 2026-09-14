@@ -16,7 +16,7 @@ Esta etapa usa Next.js 16 / React 19 na raiz do repositório. Interface e API s�
 
 Use um banco novo para o piloto ou faça o baseline de instalações anteriores conforme `database/README.md`. As migrations versionadas criam a fundação de empresas, membros, identidade web, catálogo, estoque, pedidos, catálogo público, checkout e convites. Não execute migrations automaticamente em builds concorrentes da Vercel.
 
-Em um ambiente administrativo, defina `DATABASE_MIGRATION_URL` e execute `pnpm db:migrate`. Esse comando usa o dono de migrations e verifica checksums. Não configure essa credencial administrativa como variável do site. O usuário de runtime deve ser provisionado pelo administrador/provedor com LOGIN e associação à role `acougue_runtime`, sem SUPERUSER, BYPASSRLS, ownership dos schemas ou privilégios administrativos. A senha deve ser definida diretamente no gerenciador de segredos/provedor.
+Em um ambiente administrativo, defina `DATABASE_MIGRATION_URL` para o mesmo banco lógico usado pelo site e execute `pnpm db:migrate`. Esse comando usa o dono de migrations e verifica checksums. Não configure essa credencial administrativa como variável do site. O usuário de runtime deve ser provisionado pelo administrador/provedor com LOGIN e associação à role `acougue_runtime`, sem SUPERUSER, BYPASSRLS, ownership dos schemas ou privilégios administrativos. A senha deve ser definida diretamente no gerenciador de segredos/provedor. Depois, faça um novo deploy/restart para validar o schema atualizado.
 
 **Bancos antigos:** a migration 0003 anterior gravava um checksum fictício. O runner recusa esse histórico; é necessário inspecionar o schema e estabelecer um baseline antes da atualização. Esta entrega não altera o Neon existente automaticamente.
 

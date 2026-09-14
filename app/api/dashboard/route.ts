@@ -35,8 +35,9 @@ export async function GET(request: NextRequest) {
         ) price ON true ORDER BY p.created_at DESC,p.id LIMIT 201
       `, [selectedStore?.id ?? null])).rows;
       const activity = (await client.query('SELECT id,action,reason,created_at FROM app.audit_log ORDER BY created_at DESC,id LIMIT 5')).rows;
-      const orders = (await client.query(`SELECT id, public_number::text AS "publicNumber", customer_name AS "customerName", fulfillment_type AS "fulfillmentType", fulfillment_status AS "fulfillmentStatus", estimated_total_minor::text AS "estimatedTotalMinor", final_total_minor::text AS "finalTotalMinor", created_at AS "createdAt"
-        FROM app.sales_order WHERE organization_id=$1 AND store_id=$2 AND fulfillment_status NOT IN ('COMPLETED','CANCELED') ORDER BY created_at,id LIMIT 50`, [identity.organizationId, selectedStore?.id ?? null])).rows;
+      const orderTable = (await client.query<{ tableName: string | null }>(`SELECT to_regclass('app.sales_order')::text AS "tableName"`)).rows[0]?.tableName;
+      const orders = orderTable ? (await client.query(`SELECT id, public_number::text AS "publicNumber", customer_name AS "customerName", fulfillment_type AS "fulfillmentType", fulfillment_status AS "fulfillmentStatus", estimated_total_minor::text AS "estimatedTotalMinor", final_total_minor::text AS "finalTotalMinor", created_at AS "createdAt"
+        FROM app.sales_order WHERE organization_id=$1 AND store_id=$2 AND fulfillment_status NOT IN ('COMPLETED','CANCELED') ORDER BY created_at,id LIMIT 50`, [identity.organizationId, selectedStore?.id ?? null])).rows : [];
       return { organization, stores, products: products.slice(0, 200), hasMore: products.length > 200, activity,
         orders,
         email: identity.email, role: membership.role, canCreateProduct: canPerform(membership.role, 'MANAGER'),

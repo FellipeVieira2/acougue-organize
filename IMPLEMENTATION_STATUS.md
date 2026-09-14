@@ -26,6 +26,7 @@ A integração foi consolidada na main em dde6323, após o painel da v0 da PR #5
 - Página de acompanhamento em `/{storeSlug}/pedido/{publicNumber}` com token, status, itens, peso e total estimado/final.
 - Aprovação pública de peso via token em `/api/public/stores/{slug}/orders/{publicNumber}/approve`, sem nova movimentação de estoque.
 - Fila administrativa de pedidos no dashboard, com confirmação e início de separação autorizados para operadores.
+- Dashboard tolera temporariamente banco remoto anterior às migrations de pedidos: a fila retorna vazia até `app.sales_order` existir, sem expor erro SQL ao cliente.
 
 ## Evidências locais
 
@@ -36,6 +37,8 @@ Essa evidência não confirma a configuração do banco nem o deployment remoto.
 ## Próximas implementações
 
 Recuperação/verificação de e-mail, convites, escolha de empresa/loja, paginação completa, integração avançada dessas entidades no painel, caixa e billing. O painel informa o limite dos 200 produtos carregados. Catálogo, quote, criação, acompanhamento e aprovação pública de pedidos já existem nas rotas `/api/public/stores/{slug}/catalog`, `/api/public/stores/{slug}/quote`, `/api/public/stores/{slug}/orders`, `/api/public/stores/{slug}/orders/{publicNumber}` e `/api/public/stores/{slug}/orders/{publicNumber}/approve`; as telas públicas estão em `/{storeSlug}` e `/{storeSlug}/pedido/{publicNumber}`.
+
+Após erro de dashboard em produção em 14/09/2026, a leitura da fila foi tornada compatível com bancos ainda não atualizados. É obrigatório aplicar as migrations versionadas no banco apontado por `DATABASE_URL` antes de testar pedidos, estoque ou catálogo público; a compatibilidade não substitui a migração.
 
 O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele não está exposto como rota Next e não implementa persistência de idempotência; validar o cabeçalho não equivale a garantir reexecução segura. As rotas web concretas usam as próprias transações autorizadas.
 
