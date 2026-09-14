@@ -2,10 +2,10 @@
 
 import useSWR from "swr"
 import { useState, type FormEvent } from "react"
-import { ArrowUpRight, Beef, Boxes, LayoutDashboard, Menu, PackagePlus, Store, X } from "lucide-react"
+import { ArrowUpRight, Beef, Boxes, LayoutDashboard, Menu, PackagePlus, ShoppingBag, Store, X } from "lucide-react"
 import { formatBRL, priceToMinor } from "../lib/money.ts"
 
-const navItems = [{ label: "Visão geral", icon: LayoutDashboard }, { label: "Catálogo", icon: Beef }, { label: "Estoque", icon: Boxes }, { label: "Lojas", icon: Store }]
+const navItems = [{ label: "Visão geral", icon: LayoutDashboard }, { label: "Pedidos", icon: ShoppingBag }, { label: "Catálogo", icon: Beef }, { label: "Estoque", icon: Boxes }, { label: "Lojas", icon: Store }]
 type DashboardProduct = { id: string; name: string; sku: string; stock_unit: string; active: boolean; amountMinor: string | null }
 type DashboardData = { organization: { name: string; status: string }; email: string; role: string; canCreateProduct: boolean; priceStore: string | null; hasMore: boolean; stores: { id: string; name: string; active: boolean }[]; products: DashboardProduct[]; activity: { id: string; action: string; reason: string | null; created_at: string }[] }
 class HttpError extends Error { readonly status: number; constructor(message: string, status: number) { super(message); this.status = status } }
