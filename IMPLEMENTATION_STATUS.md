@@ -1,5 +1,17 @@
 # Integração web e continuidade com a v0
 
+## Situação atual — banco remoto em 14/09/2026
+
+Aplicadas no Neon conectado ao projeto Vercel as quatro migrações pendentes: `0005_butcher_catalog_inventory.sql`, `0006_orders.sql`, `0007_public_catalog.sql` e `0008_guest_checkout.sql`. A execução ocorreu em uma única transação, com bloqueio de migração, verificação dos cinco registros anteriores e SHA-256 de cada arquivo publicado antes da execução. Os arquivos originais e seus checksums foram preservados.
+
+A consulta posterior confirmou nove registros em `public.schema_migrations` e a existência de `app.sales_order`, `app.inventory_balance`, `app.inventory_movement`, `app.catalog_offer` e `app.idempotency_record`. O editor foi devolvido ao modo somente leitura. Não foram inseridos pedidos ou cadastros fictícios no banco remoto.
+
+As referências abaixo à atualização remota ainda pendente são históricas. Continuam pendentes a validação da conexão de aplicação com privilégios restritos, das variáveis de produção e do fluxo autenticado completo em produção. A instalação das tabelas não comprova essas condições.
+
+Atualização local sincronizada com as alterações da v0 até `4e1710d`; 38 testes unitários aprovados após essa sincronização.
+
+Próxima fatia funcional: recebimento de mercadoria por lote, com quantidade inicial, custo total de aquisição, identificação e rastreabilidade. Antes de expor saldo atual por lote, integrar também as baixas e ajustes existentes, para não apresentar um saldo que ignore vendas. Desossa e maturação devem consumir esses lotes, conservando massa e custo. Essa fatia ainda não está implementada. A referência arquitetural orienta as regras de negócio; a tecnologia permanece Next.js, TypeScript e PostgreSQL, com publicação na Vercel.
+
 A integração foi consolidada na main em dde6323, após o painel da v0 da PR #5. O painel verde, CSS, SWR e configuração Next.js da v0 foram preservados e conectados à autenticação do servidor.
 
 ## Funcionando nesta etapa
