@@ -12,7 +12,7 @@
     "start": "next start",
     "test": "node --test packages/domain/test/*.test.ts",
     "test:integration": "node --test packages/domain/test/database.integration.ts",
-    "test:http": "node --test packages/domain/test/http.integration.ts",
+    "test:http": "node --test packages/domain/test/http.integration.ts packages/domain/test/order-http.integration.ts",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.ts",
     "typecheck": "tsc --noEmit",
     "build": "next build",

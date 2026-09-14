@@ -1,3 +1,5 @@
+import { orderDetails } from "../../../lib/order-details.ts";
+import { weighOrderItemAuthorized } from "../../../packages/domain/src/ordering.ts";
 import { NextRequest, NextResponse } from 'next/server.js';
 import { updateProduct } from '../../../lib/products.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -87,6 +89,12 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       }
       const identity = await session(database(), token);
       if (!identity) throw new ApiError(401, 'UNAUTHORIZED', 'Entre para continuar.');
+      const weighMatch = /^\/api\/orders\/([^/]+)\/items\/([^/]+)\/weigh$/.exec(path);
+      if (weighMatch) {
+        strictBody(body, ['finalQty']);
+        if (typeof body.finalQty !== 'string') throw new ApiError(400, 'VALIDATION_ERROR', 'Informe a quantidade em gramas ou unidades inteiras.');
+        return json(await weighOrderItemAuthorized(database(), { organizationId: identity.organizationId, actorId: identity.actorId, orderId: weighMatch[1]!, orderItemId: weighMatch[2]!, finalQty: body.finalQty }));
+      }
       const orderStatusMatch = /^\/api\/orders\/([^/]+)\/status$/.exec(path);
       if (orderStatusMatch && path.startsWith('/api/orders/')) {
         strictBody(body, ['status']);
@@ -123,6 +131,8 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     } else {
       const identity = await session(database(), token);
       if (!identity) throw new ApiError(401, 'UNAUTHORIZED', 'Entre para continuar.');
+      const orderMatch = /^\/api\/orders\/([^/]+)$/.exec(path);
+      if (orderMatch && request.method === 'GET') return json(await orderDetails(database(), identity, orderMatch[1]!));
       if (path === '/api/workspace') {
         return await withMembershipTransaction(database(), identity.organizationId, identity.actorId, 'VIEWER', async client => {
           const organization = (await client.query('SELECT name,status FROM app.organization WHERE id=$1', [identity.organizationId])).rows[0];
