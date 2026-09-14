@@ -12,6 +12,7 @@ type PublicOffer = {
   id: string; productId: string; productName: string; offerName: string; preparationName: string; sku: string;
   saleUnit: "G" | "UNIT" | "FIXED_PACKAGE"; amountMinor: string; currency: string;
   minWeightG: string | null; maxWeightG: string | null; weightStepG: string | null; defaultWeightG: string | null;
+  displayOnly?: boolean;
 };
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -56,7 +57,7 @@ export async function listPublicCatalog(pool: Pool, slug: string): Promise<{ sto
       prep.name AS "preparationName", o.sku, o.sale_unit AS "saleUnit",
       pp.amount_minor::text AS "amountMinor", pp.currency,
       o.min_weight_g::text AS "minWeightG", o.max_weight_g::text AS "maxWeightG",
-      o.weight_step_g::text AS "weightStepG", o.default_weight_g::text AS "defaultWeightG"
+      o.weight_step_g::text AS "weightStepG", o.default_weight_g::text AS "defaultWeightG", false AS "displayOnly"
     FROM app.catalog_offer o
     JOIN app.product p ON p.organization_id = o.organization_id AND p.id = o.product_id AND p.active = true
     JOIN app.preparation_option prep ON prep.organization_id = o.organization_id AND prep.id = o.preparation_option_id AND prep.active = true
@@ -67,7 +68,21 @@ export async function listPublicCatalog(pool: Pool, slug: string): Promise<{ sto
       ORDER BY revision DESC LIMIT 1
     ) pp ON true
     WHERE o.organization_id = $2 AND o.active = true AND o.public_visible = true
-    ORDER BY p.name, prep.name, o.id`, [store.storeId, store.organizationId]).then(result => result.rows));
+    UNION ALL
+    SELECT p.id, p.id AS "productId", p.name AS "productName", p.sku AS "offerName",
+      'Consulte a loja' AS "preparationName", p.sku, p.stock_unit AS "saleUnit",
+      pp.amount_minor::text AS "amountMinor", pp.currency,
+      NULL AS "minWeightG", NULL AS "maxWeightG", NULL AS "weightStepG", NULL AS "defaultWeightG", true AS "displayOnly"
+    FROM app.product p
+    JOIN LATERAL (
+      SELECT amount_minor, currency FROM app.product_price price
+      WHERE price.organization_id=p.organization_id AND price.store_id=$1 AND price.product_id=p.id
+        AND price.channel IN ('STOREFRONT','POS')
+      ORDER BY CASE WHEN price.channel='STOREFRONT' THEN 0 ELSE 1 END, revision DESC LIMIT 1
+    ) pp ON true
+    WHERE p.organization_id=$2 AND p.active=true
+      AND NOT EXISTS (SELECT 1 FROM app.catalog_offer existing WHERE existing.organization_id=p.organization_id AND existing.product_id=p.id)
+    ORDER BY "productName", "preparationName", id`, [store.storeId, store.organizationId]).then(result => result.rows));
   return { store: { id: store.storeId, name: store.storeName, slug: store.storeSlug }, offers: result };
 }
 
