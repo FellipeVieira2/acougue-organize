@@ -13,7 +13,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 const cookieName = process.env.NODE_ENV === 'production' ? '__Host-acougue_session' : 'acougue_session';
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: {
+  'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+} });
 
 async function handle(request: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
@@ -78,13 +81,13 @@ async function handle(request: NextRequest): Promise<NextResponse> {
           ? await register(database(), { email: body.email, password: body.password, name: typeof body.name === 'string' ? body.name : '' })
           : await login(database(), { email: body.email, password: body.password });
         const response = json({ ok: true });
-        response.cookies.set(cookieName, newToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: SESSION_SECONDS });
+        response.cookies.set(cookieName, newToken, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/', maxAge: SESSION_SECONDS, priority: 'high' });
         return response;
       }
       if (path === '/api/auth/logout') {
         await logout(database(), token);
         const response = json({ ok: true });
-        response.cookies.set(cookieName, '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: 0 });
+        response.cookies.set(cookieName, '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/', maxAge: 0, priority: 'high' });
         return response;
       }
       const identity = await session(database(), token);

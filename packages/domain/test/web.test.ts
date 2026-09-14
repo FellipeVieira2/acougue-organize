@@ -22,6 +22,7 @@ test('origem e tamanho de JSON são verificados antes das operações', async ()
   try {
     assert.throws(() => requireOrigin(new Request('https://app.example.test/api/products', { headers: { origin: 'https://evil.example.test' } })));
     requireOrigin(new Request('https://app.example.test/api/products', { headers: { origin: 'https://app.example.test' } }));
+    requireOrigin(new Request('https://deployment.example.test/api/auth/register', { headers: { origin: 'https://deployment.example.test' } }));
   } finally { if (previous === undefined) delete process.env.APP_URL; else process.env.APP_URL = previous; }
   const request = (body: string) => new Request('https://app.example.test', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
   assert.deepEqual(await readBody(request('{"name":"Produto"}')), { name: 'Produto' });

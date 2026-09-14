@@ -9,7 +9,10 @@ import { database } from '../../../lib/web.ts';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: {
+  'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+} });
 
 export async function GET(request: NextRequest) {
   try {

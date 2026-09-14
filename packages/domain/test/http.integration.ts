@@ -21,7 +21,7 @@ test('fluxo HTTP: cadastro, isolamento, catálogo, origem e logout', async () =>
   const signup = await request('auth/register', { email: `http-${randomUUID()}@example.test`, password: 'senha-http-com-12-caracteres', name: 'Açougue HTTP A' });
   assert.equal(signup.status, 200, await signup.text());
   const header = signup.headers.get('set-cookie')!;
-  assert.match(header, /HttpOnly/i); assert.match(header, /SameSite=lax/i);
+  assert.match(header, /HttpOnly/i); assert.match(header, /SameSite=strict/i);
   const cookie = header.split(';')[0]!;
   const product = { name: 'Patinho de teste', sku: `TEST-${randomUUID()}`, stockUnit: 'G', amountMinor: '9007199254740993' };
   assert.equal((await request('products', product, cookie, 'https://evil.example.test')).status, 403);

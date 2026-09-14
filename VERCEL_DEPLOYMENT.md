@@ -7,13 +7,14 @@ Esta etapa usa Next.js 16 / React 19 na raiz do repositório. Interface e API s�
 1. Importe `FellipeVieira2/acougue-organize` na Vercel, ou use o projeto já conectado.
 2. Selecione a branch que contém esta entrega. Root Directory: raiz (`.`); Framework: Next.js; Node.js: 24.x. O `vercel.json` define instalação e build.
 3. Configure `DATABASE_URL` com a conexão PostgreSQL **pooled**, protegida por TLS, de um usuário de aplicação que possa assumir somente `acougue_runtime`. Não use o dono do banco/superuser no site. Não coloque conexão ou senha em variáveis `NEXT_PUBLIC_*`.
-4. Configure `APP_URL` com a origem HTTPS exata do site, sem caminho. Ex.: `https://seu-projeto.vercel.app`. Em previews, se não houver APP_URL, o código usa a URL do deployment informada pela Vercel. Evite herdar a origem de produção para previews.
-5. Depois de preparar o banco, defina `ALLOW_SIGNUP=true` para habilitar o cadastro inicial de empresas no piloto. Sem essa opção, novos cadastros são recusados.
-6. Faça o deploy. O build não depende de uma conexão ao banco; conta real, login e gravações exigem o banco preparado.
+4. Configure `APP_URL` com a origem HTTPS exata do site, sem caminho. Ex.: `https://acougue-organize.vercel.app`. O código também aceita automaticamente o origin real da requisição e `VERCEL_PROJECT_PRODUCTION_URL`; assim, um `APP_URL` antigo não bloqueia o próprio deployment, mas origins externos continuam rejeitados. Em previews, use uma URL própria de preview ou não configure `APP_URL`.
+5. Configure `ORDER_ACCESS_SECRET` com pelo menos 32 caracteres aleatórios. Ele protege o acompanhamento público dos pedidos; nunca publique esse valor no repositório.
+6. Depois de preparar o banco, defina `ALLOW_SIGNUP=true` para habilitar o cadastro inicial de empresas no piloto. Sem essa opção, novos cadastros são recusados.
+7. Faça o deploy. O build não depende de uma conexão ao banco; conta real, login e gravações exigem o banco preparado.
 
 ## Preparação do banco
 
-Use um banco novo para o piloto ou faça o baseline de instalações anteriores conforme `database/README.md`. As quatro migrations criam a fundação de empresas, membros e identidade web. Não execute migrations automaticamente em builds concorrentes da Vercel.
+Use um banco novo para o piloto ou faça o baseline de instalações anteriores conforme `database/README.md`. As migrations versionadas criam a fundação de empresas, membros, identidade web, catálogo, estoque, pedidos, catálogo público, checkout e convites. Não execute migrations automaticamente em builds concorrentes da Vercel.
 
 Em um ambiente administrativo, defina `DATABASE_MIGRATION_URL` e execute `pnpm db:migrate`. Esse comando usa o dono de migrations e verifica checksums. Não configure essa credencial administrativa como variável do site. O usuário de runtime deve ser provisionado pelo administrador/provedor com LOGIN e associação à role `acougue_runtime`, sem SUPERUSER, BYPASSRLS, ownership dos schemas ou privilégios administrativos. A senha deve ser definida diretamente no gerenciador de segredos/provedor.
 
