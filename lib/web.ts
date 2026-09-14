@@ -8,11 +8,13 @@ export function database(): Pool {
 }
 
 export function requireOrigin(request: Request): void {
+  const requestOrigin = request.headers.get('origin');
+  if (!requestOrigin) throw new ApiError(403, 'FORBIDDEN', 'Origem da solicitação não permitida.');
   const configured = process.env.APP_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
   const allowedOrigins = new Set<string>();
   if (configured) allowedOrigins.add(new URL(configured).origin);
-  if (process.env.NODE_ENV !== 'production' || ['localhost', '127.0.0.1'].includes(new URL(request.url).hostname)) allowedOrigins.add(new URL(request.url).origin);
-  if (!allowedOrigins.has(request.headers.get('origin') ?? '')) throw new ApiError(403, 'FORBIDDEN', 'Origem da solicitação não permitida.');
+  if (process.env.NODE_ENV !== 'production') allowedOrigins.add(new URL(request.url).origin);
+  if (!allowedOrigins.has(requestOrigin)) throw new ApiError(403, 'FORBIDDEN', 'Origem da solicitação não permitida.');
 }
 
 export async function readBody(request: Request): Promise<Record<string, unknown>> {

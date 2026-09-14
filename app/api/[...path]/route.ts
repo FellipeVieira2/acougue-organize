@@ -22,7 +22,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       if (path === '/api/auth/login' || path === '/api/auth/register') {
         strictBody(body, path.endsWith('register') ? ['email', 'password', 'name'] : ['email', 'password']);
         if (typeof body.password !== 'string') throw new ApiError(400, 'VALIDATION_ERROR', 'Informe sua senha.');
-        if (path.endsWith('register') && process.env.ALLOW_SIGNUP !== 'true') throw new ApiError(403, 'FORBIDDEN', 'Novos cadastros ainda não estão habilitados.');
+        if (path.endsWith('register') && process.env.ALLOW_SIGNUP === 'false') throw new ApiError(403, 'FORBIDDEN', 'Novos cadastros estão temporariamente desabilitados.');
         const newToken = path.endsWith('register')
           ? await register(database(), { email: body.email, password: body.password, name: typeof body.name === 'string' ? body.name : '' })
           : await login(database(), { email: body.email, password: body.password });
