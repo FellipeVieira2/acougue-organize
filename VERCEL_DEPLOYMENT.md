@@ -9,7 +9,7 @@ Esta etapa usa Next.js 16 / React 19 na raiz do repositório. Interface e API s�
 3. Configure `DATABASE_URL` com a conexão PostgreSQL **pooled**, protegida por TLS, de um usuário de aplicação que possa assumir somente `acougue_runtime`. Não use o dono do banco/superuser no site. Não coloque conexão ou senha em variáveis `NEXT_PUBLIC_*`.
 4. Configure `APP_URL` com a origem HTTPS exata do site, sem caminho. Ex.: `https://seu-projeto.vercel.app`. Em previews, se não houver APP_URL, o código usa a URL do deployment informada pela Vercel. Evite herdar a origem de produção para previews.
 5. Depois de preparar o banco, defina `ALLOW_SIGNUP=true` para habilitar o cadastro inicial de empresas no piloto. Sem essa opção, novos cadastros são recusados.
-6. Faça o deploy. O build não depende de uma conexão ao banco ; conta real, login e gravações exigem o banco preparado.
+6. Faça o deploy. O build não depende de uma conexão ao banco; conta real, login e gravações exigem o banco preparado.
 
 ## Preparação do banco
 
@@ -27,14 +27,20 @@ Em um ambiente administrativo, defina `DATABASE_MIGRATION_URL` e execute `pnpm d
 - `DATABASE_TEST_URL=... pnpm test:integration`: banco efêmero vazio com nome terminado em `_test`; requer cluster sem a role de teste preexistente.
 - `APP_TEST_URL=http://localhost:3000 pnpm test:http`: fluxo HTTP contra servidor local com banco de teste já preparado e ALLOW_SIGNUP=true. Não aponta a um deployment ou banco real.
 
-Foram validados localmente 32 testes unitários, 13 de PostgreSQL e um fluxo HTTP completo, além do build de produção. Cadastro e inclusão de produto conferidos pelo navegador local. A evidência local não significa deploy remoto já concluído.
+Foram validados localmente 33 testes unitários, 14 de PostgreSQL e um fluxo HTTP completo, além do build de produção. Cadastro e inclusão de produto conferidos pelo navegador local. A evidência local não significa deploy remoto já concluído.
 
 ## Escopo funcional
 
-Disponível: cadastro atômico de empresa/matriz/proprietário, login por e-mail e senha, cookie HttpOnly com sessão de oito horas revogável, limite persistido de tentativas por e-mail, isolamento por empresa, produtos com preço da matriz, busca/filtro local. Senhas usam scrypt com sal aleatório; tokens são armazenados como SHA-256. Requisições de escrita exigem origem autorizada e corpo limitado.
+Disponível: cadastro atômico de empresa/matriz/proprietário, login por e-mail e senha, cookie HttpOnly com sessão de oito horas revogável, limite persistido de tentativas por e-mail, isolamento por empresa, produtos com preço da matriz, edição de nome/status com controle de versão, busca/filtro local. Senhas usam scrypt com sal aleatório; tokens são armazenados como SHA-256. Requisições de escrita exigem origem autorizada e corpo limitado.
 
 O painel carrega até 200 produtos. Métricas de produtos referem-se a esse conjunto. Não há modo demonstrativo com dados fictícios nesta interface.
 
-Ainda pendentes: confirmação de e-mail, recuperação de senha, MFA, convites e seleção de múltiplas empresas, paginação completa, edição de produtos/preços, pedidos, estoque, caixa, pagamentos e billing. Antes de abrir um piloto público amplo, configure proteção de tráfego na Vercel e implemente verificação/recuperação de conta. O limite por e-mail não substitui proteção por origem de tráfego. Sessões e contadores expirados exigem rotina posterior de limpeza.
+Ainda pendentes: confirmação de e-mail, recuperação de senha, MFA, convites e seleção de múltiplas empresas, paginação completa, edição de preços, pedidos, estoque, caixa, pagamentos e billing. Antes de abrir um piloto público amplo, configure proteção de tráfego na Vercel e implemente verificação/recuperação de conta. O limite por e-mail não substitui proteção por origem de tráfego. Sessões e contadores expirados exigem rotina posterior de limpeza.
 
 Referências: [Deploy de Next.js](https://nextjs.org/docs/app/getting-started/deploying), [Node.js na Vercel](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions).
+
+### Pedidos públicos
+
+Configure `ORDER_ACCESS_SECRET` no servidor com um valor aleatório de pelo menos 32 caracteres, separado entre produção e preview. Nunca publique esse valor em variáveis `NEXT_PUBLIC`. A criação pública retorna indisponibilidade enquanto ele não estiver configurado; mantenha-o estável para reenvios idempotentes. Também são necessárias as migrações até `0008_guest_checkout.sql`.
+
+Antes de migrar uma instalação antiga sem histórico em `schema_migrations`, confira o esquema já existente e prepare a linha de base; não tente recriar tabelas nem registrar checksums sem comparar as definições. Use o executor corrigido para as novas migrações: ele mantém todo o lote em uma transação.

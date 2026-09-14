@@ -38,13 +38,13 @@ async function inTenant<T>(tenant: string | null, operation: (client: pg.PoolCli
 before(async () => {
   const existing = await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'");
   assert.equal(existing.rowCount, 0, 'A suíte exige banco vazio e não remove dados existentes.');
-  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql', '0004_web_identity.sql'].map(async name => ({
+  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql', '0004_web_identity.sql', '0005_butcher_catalog_inventory.sql', '0006_orders.sql', '0007_public_catalog.sql', '0008_guest_checkout.sql'].map(async name => ({
     name, sql: await readFile(new URL(`../../../database/migrations/${name}`, import.meta.url), 'utf8'),
   })));
   await assert.rejects(applyMigrations(pool, [...migrations, { name: '9999_failure.sql', sql: 'SELECT missing_migration_function()' }]));
   assert.equal((await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'")).rowCount, 0, 'Falha deve desfazer toda a instalação');
   await Promise.all([applyMigrations(pool, migrations), applyMigrations(pool, migrations)]);
-  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 4);
+  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 8);
   await assert.rejects(applyMigrations(pool, [{ ...migrations[0]!, sql: migrations[0]!.sql + '\n-- changed' }]), /checksum mismatch/);
   for (const [tenant, store, product] of [[tenantA, storeA, productA], [tenantB, storeB, productB]] as const) {
     await inTenant(tenant, async client => {
@@ -61,7 +61,7 @@ test('runtime não tem superuser, ownership ou bypass RLS', async () => {
   const roles = await pool.query("SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles WHERE rolname='acougue_runtime'");
   assert.deepEqual(roles.rows[0], { rolsuper: false, rolbypassrls: false, rolcanlogin: false });
   const tables = await pool.query("SELECT relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner) AS owner FROM pg_class JOIN pg_namespace n ON n.oid=relnamespace WHERE n.nspname='app' AND relkind='r'");
-  assert.equal(tables.rowCount, 6);
+  assert.equal(tables.rowCount, 16);
   for (const row of tables.rows) {
     assert.equal(row.relrowsecurity, true);
     assert.equal(row.relforcerowsecurity, true);
@@ -214,4 +214,99 @@ test('cadastro web é atômico, usa senha derivada e sessão revogável', async 
   assert.equal(await session(pool, secondToken), null);
   await pool.query('UPDATE identity.login_limit SET attempts=10 WHERE key_hash=$1', [digest(email)]);
   await assert.rejects(login(pool, { email, password }), /Muitas tentativas/);
+});
+
+test('edição de produto bloqueia consulta e vínculo revogado sem alterar dados ou auditoria', async () => {
+  const { updateProduct } = await import('../../../lib/products.ts');
+  const organizationId=randomUUID(), owner=randomUUID(), viewer=randomUUID(), id=randomUUID();
+  await createOrganizationWithStore(pool, { organizationId, actorId:owner, storeId:randomUUID(), auditId:randomUUID(), correlationId:randomUUID(), name:'Permissão de edição', storeName:'Matriz', storeSlug:`edit-${organizationId}` });
+  await createProductAuthorized(pool,owner,{id,organizationId,sku:'EDIT',name:'Original',stockUnit:'UNIT',saleStrategy:'UNIT'});
+  await addMembership(pool,owner,{organizationId,actorId:viewer,role:'VIEWER',status:'ACTIVE'},randomUUID(),randomUUID());
+  const changes={name:'Alterado',active:false,expectedVersion:'1'};
+  await assert.rejects(updateProduct(pool,{organizationId,actorId:viewer,email:'viewer@example.test'},id,changes,randomUUID()),/FORBIDDEN/);
+  await inTenant(organizationId,async client => { await client.query("UPDATE app.organization_membership SET status='REVOKED' WHERE actor_id=$1",[owner]); });
+  await assert.rejects(updateProduct(pool,{organizationId,actorId:owner,email:'owner@example.test'},id,changes,randomUUID()),/FORBIDDEN/);
+  await inTenant(organizationId,async client => {
+    assert.deepEqual((await client.query('SELECT name,active,version FROM app.product WHERE id=$1',[id])).rows[0],{name:'Original',active:true,version:'1'});
+    assert.equal((await client.query("SELECT id FROM app.audit_log WHERE action='product.updated'")).rowCount,0);
+  });
+});
+
+test('checkout público valida peso e moeda, reserva uma vez e isola chaves por loja', async () => {
+  const { createPublicOrder, quotePublicCatalog, getPublicOrder } = await import('../src/public-catalog.ts');
+  process.env.ORDER_ACCESS_SECRET = 'local-test-only-secret-with-at-least-32-characters';
+  const inventory = randomUUID(), preparation = randomUUID(), offer = randomUUID(), secondStore = randomUUID();
+  const slug = `teste-${storeA}`, otherSlug = `teste-${secondStore}`;
+  await inTenant(tenantA, async client => {
+    await client.query("INSERT INTO app.store(id,organization_id,name,slug) VALUES ($1,$2,'Segunda loja',$3)", [secondStore,tenantA,otherSlug]);
+    await client.query("INSERT INTO app.inventory_item(id,organization_id,name,sku,base_unit) VALUES ($1,$2,'Patinho','INV-PUB','G')", [inventory,tenantA]);
+    await client.query("INSERT INTO app.preparation_option(id,organization_id,code,name) VALUES ($1,$2,'BIFE','Bife')", [preparation,tenantA]);
+    await client.query("INSERT INTO app.catalog_offer(id,organization_id,product_id,inventory_item_id,preparation_option_id,sku,sale_unit,min_weight_g,max_weight_g,weight_step_g,public_visible) VALUES ($1,$2,$3,$4,$5,'PUB','G',250,2000,125,true)",[offer,tenantA,productA,inventory,preparation]);
+    for (const store of [storeA, secondStore]) {
+      await client.query("INSERT INTO app.inventory_balance(id,organization_id,store_id,inventory_item_id,on_hand_qty) VALUES ($1,$2,$3,$4,5000)",[randomUUID(),tenantA,store,inventory]);
+      await client.query("INSERT INTO app.product_price(id,organization_id,store_id,product_id,channel,amount_minor,currency,revision) VALUES ($1,$2,$3,$4,'STOREFRONT',3790,'BRL',1)",[randomUUID(),tenantA,store,productA]);
+    }
+  });
+  const input = { idempotencyKey: randomUUID(), requestHash:'a'.repeat(64), orderId:randomUUID(), customerName:'Cliente de teste',customerPhone:'11999990000',fulfillmentType:'PICKUP' as const,currency:'BRL',items:[{id:randomUUID(),offerId:offer,requestedQty:'1375'}] };
+  assert.equal((await quotePublicCatalog(pool,slug,[{offerId:offer,requestedQty:'1375'}])).estimatedTotalMinor,'5211');
+  for (const requestedQty of ['249','300','2125']) {
+    await assert.rejects(quotePublicCatalog(pool,slug,[{offerId:offer,requestedQty}]), {status:400});
+    await assert.rejects(createPublicOrder(pool,slug,{...input,items:[{...input.items[0]!,requestedQty}]}), {status:400});
+  }
+  await assert.rejects(createPublicOrder(pool,slug,{...input,currency:'USD'}), {status:409});
+  const [created, retried] = await Promise.all([createPublicOrder(pool,slug,input), createPublicOrder(pool,slug,{...input,orderId:randomUUID()})]);
+  assert.deepEqual(created,retried);
+  assert.equal(created.estimatedTotalMinor,'5211');
+  assert.equal((await inTenant(tenantA,async client => (await client.query('SELECT reserved_qty::text AS qty FROM app.inventory_balance WHERE store_id=$1 AND inventory_item_id=$2',[storeA,inventory])).rows[0])).qty,'1375');
+  await assert.rejects(createPublicOrder(pool,slug,{...input,requestHash:'b'.repeat(64)}), {status:409});
+  const other = await createPublicOrder(pool,otherSlug,{...input,orderId:randomUUID(),items:[{...input.items[0]!,id:randomUUID()}]});
+  assert.notEqual(other.accessToken,created.accessToken);
+  await assert.rejects(getPublicOrder(pool,otherSlug,created.publicNumber,created.accessToken), {status:404});
+  assert.equal((await getPublicOrder(pool,slug,created.publicNumber,created.accessToken)).estimatedTotalMinor,'5211');
+  delete process.env.ORDER_ACCESS_SECRET;
+});
+
+test('pesagem e aprovação concorrentes mantêm total, estoque e estado do pedido', async () => {
+  const { createOrderAuthorized, weighOrderItemAuthorized, approveOrderItemAuthorized } = await import('../src/ordering.ts');
+  const { approvePublicOrderItem } = await import('../src/public-catalog.ts');
+  const { createHash } = await import('node:crypto');
+  const actorId=randomUUID(), inventory=randomUUID(), preparation=randomUUID(), offer=randomUUID();
+  await inTenant(tenantA,async client => {
+    await client.query("INSERT INTO app.organization_membership(organization_id,actor_id,role,status) VALUES ($1,$2,'OPERATOR','ACTIVE')",[tenantA,actorId]);
+    await client.query("INSERT INTO app.inventory_item(id,organization_id,name,sku,base_unit) VALUES ($1,$2,'Estoque pesagem','INV-WEIGH','G')",[inventory,tenantA]);
+    await client.query("INSERT INTO app.preparation_option(id,organization_id,code,name) VALUES ($1,$2,'WEIGH','Pesagem')",[preparation,tenantA]);
+    await client.query("INSERT INTO app.catalog_offer(id,organization_id,product_id,inventory_item_id,preparation_option_id,sku,sale_unit,public_visible) VALUES ($1,$2,$3,$4,$5,'WEIGH','G',true)",[offer,tenantA,productA,inventory,preparation]);
+    await client.query("INSERT INTO app.inventory_balance(id,organization_id,store_id,inventory_item_id,on_hand_qty) VALUES ($1,$2,$3,$4,10000)",[randomUUID(),tenantA,storeA,inventory]);
+  });
+  async function makeOrder() {
+    const orderId=randomUUID(),items=[randomUUID(),randomUUID()];
+    const order=await createOrderAuthorized(pool,{organizationId:tenantA,storeId:storeA,orderId,actorId,customerName:'Teste pesagem',customerPhone:'11900000000',fulfillmentType:'PICKUP',currency:'BRL',items:items.map(id=>({id,offerId:offer,requestedQty:'500',reservedQty:'500'}))});
+    return {...order,items};
+  }
+  const first=await makeOrder();
+  const weigh=(orderId:string,orderItemId:string,finalQty='500')=>weighOrderItemAuthorized(pool,{organizationId:tenantA,actorId,orderId,orderItemId,finalQty});
+  await assert.rejects(weigh(first.orderId,first.items[0]!),{status:409});
+  await inTenant(tenantA,async client=>{await client.query("UPDATE app.sales_order SET fulfillment_status='SEPARATING',order_status='CONFIRMED' WHERE id=$1",[first.orderId]);});
+  await Promise.all(first.items.map(id=>weigh(first.orderId,id)));
+  const summary=()=>inTenant(tenantA,async client=>(await client.query('SELECT fulfillment_status AS status,final_total_minor::text AS total FROM app.sales_order WHERE id=$1',[first.orderId])).rows[0]);
+  assert.deepEqual(await summary(),{status:'WEIGHT_ADJUSTED',total:'3790'});
+  await assert.rejects(weigh(first.orderId,first.items[0]!),{status:409});
+  const second=await makeOrder();
+  const token='a'.repeat(43);
+  await inTenant(tenantA,async client=>{await client.query("UPDATE app.sales_order SET fulfillment_status='SEPARATING',order_status='CONFIRMED',public_access_token_hash=$2 WHERE id=$1",[second.orderId,createHash('sha256').update(token).digest('hex')]);});
+  await weigh(second.orderId,second.items[0]!);
+  assert.equal((await inTenant(tenantA,async client=>(await client.query('SELECT fulfillment_status AS status FROM app.sales_order WHERE id=$1',[second.orderId])).rows[0])).status,'WEIGHING');
+  await weigh(second.orderId,second.items[1]!,'450');
+  await assert.rejects(weigh(second.orderId,second.items[1]!,'450'),{status:409});
+  await assert.rejects(approvePublicOrderItem(pool,`teste-${storeA}`,second.publicNumber,'b'.repeat(43),second.items[1]!),{status:404});
+  const results=await Promise.allSettled([
+    approveOrderItemAuthorized(pool,{organizationId:tenantA,actorId,orderId:second.orderId,orderItemId:second.items[1]!}),
+    approvePublicOrderItem(pool,`teste-${storeA}`,second.publicNumber,token,second.items[1]!)
+  ]);
+  assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
+  assert.equal((await inTenant(tenantA,async client=>(await client.query('SELECT final_total_minor::text AS total FROM app.sales_order WHERE id=$1',[second.orderId])).rows[0])).total,'3601');
+  await inTenant(tenantA,async client=>{await client.query("UPDATE app.sales_order SET order_status='CANCELED' WHERE id=$1",[second.orderId]);});
+  await assert.rejects(approvePublicOrderItem(pool,`teste-${storeA}`,second.publicNumber,token,second.items[1]!),{status:409});
+  const balance=await inTenant(tenantA,async client=>(await client.query('SELECT on_hand_qty::text AS stock,reserved_qty::text AS reserved FROM app.inventory_balance WHERE inventory_item_id=$1',[inventory])).rows[0]);
+  assert.deepEqual(balance,{stock:'8050',reserved:'0'});
 });

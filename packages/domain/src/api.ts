@@ -34,6 +34,8 @@ const CURRENCY = /^[A-Z]{3}$/;
 const CHANNELS = ["POS", "STOREFRONT", "MANUAL", "IFOOD", "B2B"] as const;
 const STOCK_UNITS = ["G", "UNIT"] as const;
 const SALE_STRATEGIES = ["WEIGHT_FREE", "WEIGHT_INCREMENT", "FIXED_PACKAGE", "APPROXIMATE_UNIT", "MINIMUM_WEIGHT", "UNIT"] as const;
+const BASE_UNITS = ["G", "UNIT"] as const;
+const SALE_UNITS = ["G", "UNIT", "FIXED_PACKAGE"] as const;
 
 type JsonObject = Record<string, unknown>;
 
@@ -86,6 +88,43 @@ export function parseCreateProductRequest(value: unknown): CreateProductRequest 
   const saleStrategy = enumField(body, "saleStrategy", SALE_STRATEGIES);
   if ((stockUnit === "UNIT") !== (saleStrategy === "UNIT")) throw new ApiError(400, "VALIDATION_ERROR", "Invalid product sale configuration", { saleStrategy: "UNIT requires UNIT stockUnit and vice versa" });
   return { id: uuidField(body, "id"), organizationId: uuidField(body, "organizationId"), sku: stringField(body, "sku", 80), name: stringField(body, "name", 200), stockUnit, saleStrategy };
+}
+
+export type CreatePreparationOptionRequest = { id: string; organizationId: string; code: string; name: string };
+export function parseCreatePreparationOptionRequest(value: unknown): CreatePreparationOptionRequest {
+  const body = object(value);
+  strictKeys(body, ["id", "organizationId", "code", "name"]);
+  const code = stringField(body, "code", 40);
+  if (!/^[A-Z0-9_]+$/.test(code)) throw new ApiError(400, "VALIDATION_ERROR", "Invalid preparation code", { code: "must contain uppercase letters, numbers or underscore" });
+  return { id: uuidField(body, "id"), organizationId: uuidField(body, "organizationId"), code, name: stringField(body, "name", 100) };
+}
+
+export type CreateInventoryItemRequest = { id: string; organizationId: string; name: string; sku: string; baseUnit: typeof BASE_UNITS[number] };
+export function parseCreateInventoryItemRequest(value: unknown): CreateInventoryItemRequest {
+  const body = object(value);
+  strictKeys(body, ["id", "organizationId", "name", "sku", "baseUnit"]);
+  return { id: uuidField(body, "id"), organizationId: uuidField(body, "organizationId"), name: stringField(body, "name", 200), sku: stringField(body, "sku", 80), baseUnit: enumField(body, "baseUnit", BASE_UNITS) };
+}
+
+export type CreateCatalogOfferRequest = {
+  id: string; organizationId: string; productId: string; inventoryItemId: string; preparationOptionId: string;
+  sku: string; saleUnit: typeof SALE_UNITS[number]; minWeightG: string | null; maxWeightG: string | null;
+  weightStepG: string | null; defaultWeightG: string | null;
+};
+export function parseCreateCatalogOfferRequest(value: unknown): CreateCatalogOfferRequest {
+  const body = object(value);
+  strictKeys(body, ["id", "organizationId", "productId", "inventoryItemId", "preparationOptionId", "sku", "saleUnit", "minWeightG", "maxWeightG", "weightStepG", "defaultWeightG"]);
+  return {
+    id: uuidField(body, "id"), organizationId: uuidField(body, "organizationId"), productId: uuidField(body, "productId"),
+    inventoryItemId: uuidField(body, "inventoryItemId"), preparationOptionId: uuidField(body, "preparationOptionId"), sku: stringField(body, "sku", 80),
+    saleUnit: enumField(body, "saleUnit", SALE_UNITS), minWeightG: optionalPositiveInteger(body, "minWeightG"), maxWeightG: optionalPositiveInteger(body, "maxWeightG"),
+    weightStepG: optionalPositiveInteger(body, "weightStepG"), defaultWeightG: optionalPositiveInteger(body, "defaultWeightG"),
+  };
+}
+
+function optionalPositiveInteger(body: JsonObject, field: string): string | null {
+  if (body[field] === undefined || body[field] === null) return null;
+  try { return positive(parseInteger(body[field])).toString(); } catch { throw new ApiError(400, "VALIDATION_ERROR", `Invalid ${field}`); }
 }
 
 export type CreatePriceRequest = { id: string; organizationId: string; storeId: string; productId: string; channel: typeof CHANNELS[number]; amountMinor: string; currency: string; revision: string };

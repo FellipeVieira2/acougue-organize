@@ -1,5 +1,7 @@
 export * from './quantities.ts';
 export * from './orders.ts';
+export * from './ordering.ts';
+export * from './public-catalog.ts';
 export * from './entitlements.ts';
 export * from './production.ts';
 export * from './database.ts';
