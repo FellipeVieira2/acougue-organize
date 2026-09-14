@@ -18,6 +18,8 @@ Use um banco novo para o piloto ou faça o baseline de instalações anteriores 
 
 Em um ambiente administrativo, defina `DATABASE_MIGRATION_URL` para o mesmo banco lógico usado pelo site e execute `pnpm db:migrate`. Esse comando usa o dono de migrations e verifica checksums. Não configure essa credencial administrativa como variável do site. O usuário de runtime deve ser provisionado pelo administrador/provedor com LOGIN e associação à role `acougue_runtime`, sem SUPERUSER, BYPASSRLS, ownership dos schemas ou privilégios administrativos. A senha deve ser definida diretamente no gerenciador de segredos/provedor. Depois, faça um novo deploy/restart para validar o schema atualizado.
 
+Para diagnosticar um preview sem expor credenciais, consulte no banco administrativo: `SELECT name, applied_at FROM public.schema_migrations ORDER BY name;`. O banco usado por `DATABASE_URL` precisa conter as migrations até `0008_guest_checkout.sql` e a tabela `app.sales_order`; não use a URL de outro projeto/ambiente.
+
 **Bancos antigos:** a migration 0003 anterior gravava um checksum fictício. O runner recusa esse histórico; é necessário inspecionar o schema e estabelecer um baseline antes da atualização. Esta entrega não altera o Neon existente automaticamente.
 
 ## Rodar e verificar

@@ -159,5 +159,11 @@ export function parseIdempotencyKey(value: string | null): string {
 export function apiErrorResponse(error: unknown, requestId: string): { status: number; body: { error: { code: string; message: string; fieldErrors?: Record<string, string>; requestId: string } } } {
   if (error instanceof ApiError) return { status: error.status, body: { error: { code: error.code, message: error.message, ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}), requestId } } };
   if (error instanceof Error && error.message === "FORBIDDEN") return { status: 403, body: { error: { code: "FORBIDDEN", message: "You do not have permission for this resource", requestId } } };
+  if (isSchemaNotReadyError(error)) return { status: 503, body: { error: { code: "PRECONDITION_REQUIRED", message: "O banco ainda não está atualizado para esta versão.", requestId } } };
   return { status: 500, body: { error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred", requestId } } };
+}
+
+function isSchemaNotReadyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error
+    && ["42P01", "42703", "42883"].includes(String(error.code));
 }

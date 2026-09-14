@@ -42,6 +42,8 @@ Após erro de dashboard em produção em 14/09/2026, a leitura da fila foi torna
 
 Após erro do catálogo público em produção em 14/09/2026, erros de tabela/função ausente passaram a retornar `503 PRECONDITION_REQUIRED` sem detalhes SQL. A causa operacional continua sendo atualizar o banco remoto com todas as migrations, inclusive `0005_butcher_catalog_inventory.sql` e `0007_public_catalog.sql`.
 
+Após novo `INTERNAL_ERROR` no dashboard de preview em 14/09/2026, erros de schema parcialmente atualizado (`42P01`, `42703`, `42883`) passaram a retornar `503 PRECONDITION_REQUIRED` sem dados SQL. Confirmar no banco do preview a tabela `app.sales_order` e as nove migrations aplicadas; preview e produção podem apontar para bancos diferentes.
+
 O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele não está exposto como rota Next e não implementa persistência de idempotência; validar o cabeçalho não equivale a garantir reexecução segura. As rotas web concretas usam as próprias transações autorizadas.
 
 ## Trabalhando entre Codex e v0

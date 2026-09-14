@@ -46,6 +46,9 @@ export async function GET(request: NextRequest) {
     });
     return json(dashboard);
   } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && ['42P01', '42703', '42883'].includes(String(error.code))) {
+      return json({ error: { code: 'PRECONDITION_REQUIRED', message: 'O banco ainda não está atualizado para esta versão.', requestId: randomUUID() } }, 503);
+    }
     const result = apiErrorResponse(error, randomUUID());
     return json(result.body, result.status);
   }
