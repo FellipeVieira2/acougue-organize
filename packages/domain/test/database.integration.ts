@@ -38,13 +38,13 @@ async function inTenant<T>(tenant: string | null, operation: (client: pg.PoolCli
 before(async () => {
   const existing = await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'");
   assert.equal(existing.rowCount, 0, 'A suíte exige banco vazio e não remove dados existentes.');
-  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql', '0004_web_identity.sql', '0005_butcher_catalog_inventory.sql', '0006_orders.sql', '0007_public_catalog.sql', '0008_guest_checkout.sql'].map(async name => ({
+  const migrations = await Promise.all(['0001_tenant_foundation.sql', '0002_migration_metadata.sql', '0003_organization_membership.sql', '0004_web_identity.sql', '0005_butcher_catalog_inventory.sql', '0005_organization_invitations.sql', '0006_orders.sql', '0007_public_catalog.sql', '0008_guest_checkout.sql'].map(async name => ({
     name, sql: await readFile(new URL(`../../../database/migrations/${name}`, import.meta.url), 'utf8'),
   })));
   await assert.rejects(applyMigrations(pool, [...migrations, { name: '9999_failure.sql', sql: 'SELECT missing_migration_function()' }]));
   assert.equal((await pool.query("SELECT 1 FROM pg_namespace WHERE nspname='app'")).rowCount, 0, 'Falha deve desfazer toda a instalação');
   await Promise.all([applyMigrations(pool, migrations), applyMigrations(pool, migrations)]);
-  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 8);
+  assert.equal((await pool.query('SELECT * FROM public.schema_migrations')).rowCount, 9);
   await assert.rejects(applyMigrations(pool, [{ ...migrations[0]!, sql: migrations[0]!.sql + '\n-- changed' }]), /checksum mismatch/);
   for (const [tenant, store, product] of [[tenantA, storeA, productA], [tenantB, storeB, productB]] as const) {
     await inTenant(tenant, async client => {
@@ -61,7 +61,7 @@ test('runtime não tem superuser, ownership ou bypass RLS', async () => {
   const roles = await pool.query("SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles WHERE rolname='acougue_runtime'");
   assert.deepEqual(roles.rows[0], { rolsuper: false, rolbypassrls: false, rolcanlogin: false });
   const tables = await pool.query("SELECT relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner) AS owner FROM pg_class JOIN pg_namespace n ON n.oid=relnamespace WHERE n.nspname='app' AND relkind='r'");
-  assert.equal(tables.rowCount, 16);
+  assert.equal(tables.rowCount, 17);
   for (const row of tables.rows) {
     assert.equal(row.relrowsecurity, true);
     assert.equal(row.relforcerowsecurity, true);

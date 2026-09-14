@@ -74,3 +74,11 @@ A pendência de serialização da preparação foi tratada: pesagem, aprovação
 O resumo distingue itens ainda em pesagem de itens aguardando aprovação, exclui cancelados dos totais e só publica o total final quando todos os itens estão resolvidos. Corrigido também o tipo do parâmetro SQL ao liberar excedente da reserva, que impedia executar a pesagem no PostgreSQL.
 
 Validação: 38 testes unitários e 16 testes PostgreSQL aprovados, incluindo duas pesagens concorrentes, disputa entre aprovação administrativa e pública, token inválido, bloqueio antes da separação e após cancelamento, total final e saldo físico sem consumo duplicado. Build de produção aprovado. As telas administrativas de pesagem e a ativação do banco remoto continuam pendentes.
+
+## Entrada da plataforma e página de vendas — 14/09/2026
+
+O fluxo principal em `/` é login do açougue e acesso ao painel; uma sessão válida abre diretamente a operação. A tela inicial foi redesenhada com formulário em destaque e layout adaptável a telas menores. A página com atalhos circulares da v0 foi substituída, e as rotas de autenticação e pedidos removidas naquele merge foram restauradas.
+
+A venda pública continua em `/{slug}`. No painel, em Lojas, cada loja ativa apresenta Ver página de vendas e Copiar link para clientes. `/loja?loja={slug}` direciona para o endereço específico; `/loja` sem identificação orienta o cliente a solicitar o link ao açougue, sem presumir uma loja chamada matriz.
+
+Integrada também a tela de detalhes e pesagem: consulta autenticada, quantidades inteiras, validação de reserva, baixa única e aviso de aprovação pendente. Build, 38 testes unitários, 16 testes de banco (nove arquivos de migração, incluindo convites) e dois fluxos HTTP aprovados. Login e pesagem conferidos visualmente em ambiente local. A configuração e atualização do banco remoto ainda precisam ser concluídas para validar a operação em produção.

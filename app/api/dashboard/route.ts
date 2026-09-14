@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     const requestedStoreId = request.nextUrl.searchParams.get('storeId');
     const dashboard = await withMembershipTransaction(database(), identity.organizationId, identity.actorId, 'VIEWER', async (client, membership) => {
       const organization = (await client.query('SELECT name,status FROM app.organization WHERE id=$1', [identity.organizationId])).rows[0];
-      const stores = (await client.query('SELECT id,name,active FROM app.store ORDER BY created_at,id')).rows;
+      const stores = (await client.query('SELECT id,name,slug,active FROM app.store ORDER BY created_at,id')).rows;
       const selectedStore = resolveSelectedStore(stores, requestedStoreId)
       const products = (await client.query(`
         SELECT p.id,p.name,p.sku,p.stock_unit,p.active,p.version,price.amount_minor AS "amountMinor",price.currency

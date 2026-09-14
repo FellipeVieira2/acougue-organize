@@ -6,3 +6,13 @@
 
 .weigh-item { border-top: 1px solid #e5e7eb; padding: 20px 0; }
 .weigh-item .editor-form { max-width: 360px; }
+
+.login-layout { min-height:100dvh; display:grid; grid-template-columns:1.05fr 1fr; background:#f7f9f6; }
+.login-story { padding:clamp(32px,5vw,80px); background:#173e31; color:#f4f8f0; display:flex; flex-direction:column; justify-content:space-between; gap:64px; }
+.login-story .brand { color:#f4f8f0; }.login-story .brand-mark { background:#315746; color:#d9ebbd; }
+.login-story h2 { font-size:clamp(30px,3.3vw,48px); line-height:1.15; letter-spacing:-1.6px; font-weight:600; margin:18px 0 24px; }
+.login-story p { color:#c4d3c9; max-width:430px; line-height:1.75; }.login-story .login-kicker { color:#cbdfab; font-size:11px; letter-spacing:2px; font-weight:700; }
+.login-points { display:grid; gap:18px; margin-top:38px; }.login-points span { display:flex; gap:12px; align-items:center; font-size:14px; }.login-points svg { width:19px; color:#c4dba2; }.login-story small { color:#9bb3a5; font-size:12px; }
+.login-entry { display:grid; place-items:center; padding:40px 28px; }.login-entry .access-card { width:100%; max-width:440px; padding:40px; box-shadow:0 16px 60px #163e3108; border:1px solid #e5ebe3; border-radius:20px; background:white; }.login-entry h1 { font-size:29px; letter-spacing:-.8px; }.login-entry .login-note { margin-top:30px; padding-top:22px; border-top:1px solid #edf0ea; font-size:12px; line-height:1.6; color:#6d796f; }.login-entry input { min-height:48px; }.login-entry .primary-button { justify-content:center; min-height:48px; }
+.store-selector { display:flex; align-items:center; gap:16px; padding:16px 20px; margin-bottom:20px; }.store-selector select { border:1px solid #dce4da; border-radius:8px; padding:8px 12px; background:white; }.store-share { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }.activity-row:has(.store-share) { flex-wrap:wrap; }
+@media(max-width:800px) { .login-layout { grid-template-columns:1fr; }.login-story { padding:24px; gap:20px; }.login-story>div:not(.brand),.login-story>small { display:none; }.login-entry { padding:28px 20px; align-items:start; }.login-entry .access-card { max-width:480px; padding:28px; }.store-selector { flex-wrap:wrap; } }
