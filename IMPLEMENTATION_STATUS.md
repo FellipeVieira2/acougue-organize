@@ -18,9 +18,11 @@ Em 13/09/2026: 32 testes unitários, 13 testes com PostgreSQL 17 e um fluxo HTTP
 
 Essa evidência não confirma a configuração do banco nem o deployment remoto.
 
+- Convites de equipe: migration 0005 com RLS, criação autorizada por ADMIN e aceite com token de uso único.
+
 ## Próximas implementações
 
-Recuperação/verificação de e-mail, convites, escolha de empresa/loja, paginação completa, edição com revisão concorrente, estoque, pedidos, caixa e billing. O painel informa o limite dos 200 produtos carregados. Estoque tem estado explícito de funcionalidade em preparação, sem números demonstrativos.
+Recuperação/verificação de e-mail, escolha de empresa/loja, paginação completa, edição com revisão concorrente, estoque, pedidos, caixa e billing. O painel informa o limite dos 200 produtos carregados. Estoque tem estado explícito de funcionalidade em preparação, sem números demonstrativos.
 
 O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele não está exposto como rota Next e não implementa persistência de idempotência; validar o cabeçalho não equivale a garantir reexecução segura. As rotas web concretas usam as próprias transações autorizadas.
 
