@@ -40,6 +40,8 @@ Recuperação/verificação de e-mail, convites, escolha de empresa/loja, pagina
 
 Após erro de dashboard em produção em 14/09/2026, a leitura da fila foi tornada compatível com bancos ainda não atualizados. É obrigatório aplicar as migrations versionadas no banco apontado por `DATABASE_URL` antes de testar pedidos, estoque ou catálogo público; a compatibilidade não substitui a migração.
 
+Após erro do catálogo público em produção em 14/09/2026, erros de tabela/função ausente passaram a retornar `503 PRECONDITION_REQUIRED` sem detalhes SQL. A causa operacional continua sendo atualizar o banco remoto com todas as migrations, inclusive `0005_butcher_catalog_inventory.sql` e `0007_public_catalog.sql`.
+
 O adaptador de domínio http.ts exige autenticação injetada pelo servidor. Ele não está exposto como rota Next e não implementa persistência de idempotência; validar o cabeçalho não equivale a garantir reexecução segura. As rotas web concretas usam as próprias transações autorizadas.
 
 ## Trabalhando entre Codex e v0

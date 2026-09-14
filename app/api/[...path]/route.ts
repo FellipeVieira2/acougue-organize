@@ -152,6 +152,9 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     }
     throw new ApiError(404, 'NOT_FOUND', 'Rota não encontrada.');
   } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error.code === '42P01' || error.code === '42883')) {
+      return json({ error: { code: 'PRECONDITION_REQUIRED', message: 'O catálogo público ainda não foi ativado neste banco.', requestId } }, 503);
+    }
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') return json({ error: { message: 'Esse código já está cadastrado. Use outro SKU.', requestId } }, 409);
     const result = apiErrorResponse(error, requestId);
     return json(result.body, result.status);

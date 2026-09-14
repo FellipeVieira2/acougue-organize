@@ -6,7 +6,7 @@ O papel usado pela API futura deve herdar somente os privilégios necessários d
 
 O ensaio de CI usa banco efêmero vazio e `SET LOCAL ROLE acougue_runtime`; dados de teste são fictícios. `DATABASE_TEST_URL` precisa apontar a banco de teste com nome terminado em `_test`. A suíte recusa outro nome e recusa schema `app` preexistente; não apaga banco/schema para preparar teste.
 
-Execução: `pnpm test:integration`. Requer PostgreSQL 17 e privilégios de criação de role/schema no banco de teste. Sem URL, o teste falha explicitamente; não é ignorado. O runner versionado aplica as migrations com checksum e lock transacional, sem permitir que o BEGIN/COMMIT da fundação encerre a transação externa. A suíte também verifica rollback de instalação, reaplicação concorrente, alteração de checksum, proprietário inicial e precisão de preços.
+Execução: `pnpm test:integration`. Requer PostgreSQL 17 e privilégios de criação de role/schema no banco de teste. Sem URL, o teste falha explicitamente; não é ignorado. O runner versionado aplica as nove migrations com checksum e lock transacional, incluindo os dois arquivos `0005_*.sql`, sem permitir que o BEGIN/COMMIT da fundação encerre a transação externa. A suíte também verifica rollback de instalação, reaplicação concorrente, alteração de checksum, proprietário inicial e precisão de preços.
 
 ## Bancos inicializados anteriormente
 

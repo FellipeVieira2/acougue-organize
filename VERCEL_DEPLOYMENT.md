@@ -42,6 +42,6 @@ Referências: [Deploy de Next.js](https://nextjs.org/docs/app/getting-started/de
 
 ### Pedidos públicos
 
-Configure `ORDER_ACCESS_SECRET` no servidor com um valor aleatório de pelo menos 32 caracteres, separado entre produção e preview. Nunca publique esse valor em variáveis `NEXT_PUBLIC`. A criação pública retorna indisponibilidade enquanto ele não estiver configurado; mantenha-o estável para reenvios idempotentes. Também são necessárias as migrações até `0008_guest_checkout.sql`.
+Configure `ORDER_ACCESS_SECRET` no servidor com um valor aleatório de pelo menos 32 caracteres, separado entre produção e preview. Nunca publique esse valor em variáveis `NEXT_PUBLIC`. A criação pública retorna indisponibilidade enquanto ele não estiver configurado; mantenha-o estável para reenvios idempotentes. Também são necessárias todas as migrations versionadas, incluindo os dois arquivos `0005_*.sql` e `0007_public_catalog.sql`.
 
 Antes de migrar uma instalação antiga sem histórico em `schema_migrations`, confira o esquema já existente e prepare a linha de base; não tente recriar tabelas nem registrar checksums sem comparar as definições. Use o executor corrigido para as novas migrações: ele mantém todo o lote em uma transação.

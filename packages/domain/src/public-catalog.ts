@@ -40,8 +40,13 @@ async function resolveStore(pool: Pool, slug: string): Promise<PublicStore> {
     return store;
   } catch (error) {
     await client.query("ROLLBACK");
+    if (isMissingPublicCatalogSchema(error)) throw new ApiError(503, "PRECONDITION_REQUIRED", "O catálogo público ainda não foi ativado neste banco.");
     throw error;
   } finally { client.release(); }
+}
+
+function isMissingPublicCatalogSchema(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error.code === "42P01" || error.code === "42883");
 }
 
 export async function listPublicCatalog(pool: Pool, slug: string): Promise<{ store: { id: string; name: string; slug: string }; offers: PublicOffer[] }> {
