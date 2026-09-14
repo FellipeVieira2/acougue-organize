@@ -1,4 +1,5 @@
 import { orderDetails } from "../../../lib/order-details.ts";
+import { listStock, setStock } from '../../../lib/stock.ts';
 import { weighOrderItemAuthorized } from "../../../packages/domain/src/ordering.ts";
 import { NextRequest, NextResponse } from 'next/server.js';
 import { updateProduct } from '../../../lib/products.ts';
@@ -113,6 +114,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
           return { id: orderStatusMatch[1], fulfillmentStatus: body.status };
         }));
       }
+      if (path === '/api/stock') return json(await setStock(database(),identity,body,requestId));
       const productMatch = /^\/api\/products\/([^/]+)$/.exec(path);
       if (productMatch) return json(await updateProduct(database(), identity, productMatch[1]!, body, requestId));
       if (path === '/api/products') {
@@ -134,6 +136,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     } else {
       const identity = await session(database(), token);
       if (!identity) throw new ApiError(401, 'UNAUTHORIZED', 'Entre para continuar.');
+      if (path === '/api/stock' && request.method === 'GET') return json(await listStock(database(),identity,request.nextUrl.searchParams.get('storeId')??''));
       const orderMatch = /^\/api\/orders\/([^/]+)$/.exec(path);
       if (orderMatch && request.method === 'GET') return json(await orderDetails(database(), identity, orderMatch[1]!));
       if (path === '/api/workspace') {

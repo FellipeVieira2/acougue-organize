@@ -1,0 +1,16 @@
+"use client"
+import useSWR from 'swr';
+import { useState, type FormEvent } from 'react';
+type Row={id:string;name:string;unit:string;inventoryCount:number;quantity:string|null;reserved:string|null;version:string|null};
+async function fetchStock(url:string) {
+ const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(15000)}); const b=await r.json();
+ if(!r.ok) throw new Error(b.error?.message??'Não foi possível carregar o estoque.'); return b as Row[];
+}
+export function StockPanel({storeId,canAdjust}:{storeId:string|null;canAdjust:boolean}) {
+ const {data,error,mutate}=useSWR(storeId?`/api/stock?storeId=${encodeURIComponent(storeId)}`:null,fetchStock,{shouldRetryOnError:false});
+ const [selected,setSelected]=useState<Row|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
+ async function save(e:FormEvent<HTMLFormElement>){e.preventDefault(); if(!selected||busy)return;const f=new FormData(e.currentTarget);setBusy(true);setMessage('');
+ try{const r=await fetch('/api/stock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({storeId,productId:selected.id,quantity:f.get('quantity'),reason:f.get('reason'),expectedVersion:selected.version}),signal:AbortSignal.timeout(20000)});const b=await r.json();if(!r.ok)throw new Error(b.error?.message??'Falha no ajuste.');setSelected(null);setMessage('Estoque atualizado.');await mutate();}
+ catch(e){setMessage(e instanceof Error?e.message:'Não foi possível ajustar. Atualize a lista antes de tentar novamente.');await mutate();setSelected(null);}finally{setBusy(false);}}
+ return <section className="table-card"><div className="section-heading"><h2>Estoque da loja</h2><button className="text-button" disabled={busy} onClick={()=>{setSelected(null);void mutate()}}>Atualizar</button></div><p>Informe o saldo físico total: em gramas para carnes ou unidades para itens unitários. O saldo reservado será preservado.</p>{message&&<p role="status">{message}</p>}{!storeId?<p>Selecione uma loja ativa.</p>:error?<p role="alert">{error.message}</p>:!data?<p>Carregando estoque…</p>:<>{data.length===0&&<p>Nenhum produto ativo cadastrado.</p>}{data.map(row=><div className="activity-row" key={row.id}><strong>{row.name}</strong><span>{row.inventoryCount>1?'Estoques por preparo':`${row.quantity??'0'} ${row.unit==='G'?'g':'un.'} · reservado: ${row.reserved??'0'}`}</span>{canAdjust&&<button className="text-button" disabled={busy||row.inventoryCount>1} onClick={()=>{setSelected(row);setMessage('')}}>Ajustar estoque</button>}</div>)}</>}{selected&&<form className="editor-form" onSubmit={e=>void save(e)}><h3>{selected.name}</h3><label>Saldo físico total ({selected.unit==='G'?'gramas':'unidades'})<input name="quantity" defaultValue={selected.quantity??'0'} inputMode="numeric" pattern="(0|[1-9][0-9]*)" maxLength={19} required disabled={busy}/></label><label>Motivo<input name="reason" maxLength={500} required disabled={busy}/></label><small>Quando o produto ainda não tem oferta, o primeiro ajuste prepara sua venda online com o preço cadastrado nesta loja.</small><button className="primary-button" disabled={busy}>{busy?'Salvando…':'Salvar saldo'}</button><button type="button" className="text-button" disabled={busy} onClick={()=>setSelected(null)}>Cancelar</button></form>}</section>;
+}

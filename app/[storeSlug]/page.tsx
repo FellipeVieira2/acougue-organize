@@ -47,6 +47,7 @@ export default function Storefront({ params }: { params: Promise<{ storeSlug: st
   const [cart, setCart] = useState<CartLine[]>([])
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(true)
+  const [reload, setReload] = useState(0)
   const [error, setError] = useState("")
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [cartOpen, setCartOpen] = useState(false)
@@ -54,16 +55,21 @@ export default function Storefront({ params }: { params: Promise<{ storeSlug: st
   const attempt = useRef<{ body: string; key: string } | null>(null)
   const [result, setResult] = useState<CheckoutResult | null>(null)
 
-  useEffect(() => { void params.then(value => setSlug(value.storeSlug)) }, [params])
+  useEffect(() => { void params.then(value => setSlug(value.storeSlug)).catch(() => { setError('Não foi possível identificar a loja.'); setLoading(false) }) }, [params])
   useEffect(() => {
     if (!slug) return
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
+    let live = true
     setLoading(true)
-    fetch(`/api/public/stores/${encodeURIComponent(slug)}/catalog`, { cache: "no-store" })
+    setError('')
+    fetch(`/api/public/stores/${encodeURIComponent(slug)}/catalog`, { cache: "no-store", signal: controller.signal })
       .then(async response => { const body = await response.json(); if (!response.ok) throw new RequestError(body.error?.message ?? "Loja indisponível."); return body as Catalog })
-      .then(setCatalog)
-      .catch(value => setError(value instanceof Error ? value.message : "Loja indisponível."))
-      .finally(() => setLoading(false))
-  }, [slug])
+      .then(value => { if (live) setCatalog(value) })
+      .catch(value => { if (live) setError(controller.signal.aborted ? 'A loja demorou para responder. Tente novamente.' : value instanceof Error ? value.message : 'Loja indisponível.') })
+      .finally(() => { clearTimeout(timeout); if (live) setLoading(false) })
+    return () => { live=false; clearTimeout(timeout); controller.abort() }
+  }, [slug, reload])
 
   const filteredOffers = useMemo(() => catalog?.offers.filter(offer => `${offer.productName} ${offer.preparationName}`.toLocaleLowerCase("pt-BR").includes(query.toLocaleLowerCase("pt-BR"))) ?? [], [catalog, query])
   const totalLines = cart.length
@@ -93,12 +99,12 @@ export default function Storefront({ params }: { params: Promise<{ storeSlug: st
   function remove(offerId: string) { setCart(current => current.filter(line => line.offer.id !== offerId)) }
 
   if (loading) return <main className="store-loading"><div className="store-loader"><span className="brand-mark"><Beef /></span><p>Abrindo o balcão...</p></div></main>
-  if (error || !catalog) return <main className="store-loading"><div className="store-loader"><span className="brand-mark"><Beef /></span><h1>Loja indisponível</h1><p>{error || "Não encontramos este endereço."}</p></div></main>
+  if (error || !catalog) return <main className="store-loading"><div className="store-loader"><span className="brand-mark"><Beef /></span><h1>Loja indisponível</h1><p>{error || "Não encontramos este endereço."}</p><button className="primary-button" onClick={() => setReload(value => value + 1)}>Tentar novamente</button></div></main>
   return <main className="storefront-shell">
     <header className="store-header"><a className="store-brand" href={`/${catalog.store.slug}`}><span className="brand-mark"><Beef /></span><span><small>pedido direto</small><strong>{catalog.store.name}</strong></span></a><div className="store-header-meta"><span><Clock3 /> preparo no dia</span><button className="cart-trigger" onClick={() => setCartOpen(true)} aria-label={`Abrir carrinho com ${totalLines} itens`}><ShoppingBag /><b>{totalLines}</b></button></div></header>
     <section className="store-hero"><div><p className="store-kicker">DO BALCÃO PARA SUA CASA</p><h1>Escolha o corte.<br /><em>Do jeito que você gosta.</em></h1><p>Selecione a apresentação, indique o peso aproximado e deixe o preparo por nossa conta.</p></div><div className="hero-stamp"><Beef /><span>carne fresca<br /><strong>todos os dias</strong></span></div></section>
     <section className="store-toolbar"><div><p className="store-section-kicker">O balcão de hoje</p><h2>Cortes e preparos</h2></div><label className="store-search"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Buscar corte ou preparo" aria-label="Buscar corte ou preparo" /></label></section>
-    <section className="offer-grid">{filteredOffers.map(offer => <article className="offer-card" key={offer.id}><div className="offer-art"><Beef /><span>{offer.saleUnit === "G" ? "por kg" : "por unidade"}</span></div><div className="offer-content"><div className="offer-title"><div><p>{offer.productName}</p><h3>{offer.preparationName}</h3></div><span className="offer-price">{money(offer.amountMinor, offer.currency)}<small>/{offer.saleUnit === "G" ? "kg" : "un."}</small></span></div><p className="offer-range">{formatWeightRange(offer)}</p><button className="offer-button" disabled={offer.displayOnly || offer.saleUnit === "FIXED_PACKAGE"} onClick={() => add(offer)}>{offer.displayOnly ? "Consulte a loja" : offer.saleUnit === "FIXED_PACKAGE" ? "Em breve" : "Adicionar"} <Plus /></button></div></article>)}</section>
+    <section className="offer-grid">{filteredOffers.map(offer => <article className="offer-card" key={offer.id}><div className="offer-art"><Beef /><span>{offer.saleUnit === "G" ? "por kg" : "por unidade"}</span></div><div className="offer-content"><div className="offer-title"><div><p>{offer.productName}</p><h3>{offer.preparationName}</h3></div><span className="offer-price">{money(offer.amountMinor, offer.currency)}<small>/{offer.saleUnit === "G" ? "kg" : "un."}</small></span></div><p className="offer-range">{formatWeightRange(offer)}</p><button className="offer-button" disabled={offer.displayOnly || offer.saleUnit === "FIXED_PACKAGE"} onClick={() => add(offer)}>{offer.displayOnly ? "Consulte a loja" : offer.saleUnit === "FIXED_PACKAGE" ? "Em breve" : "Adicionar"} {!offer.displayOnly && <Plus />}</button></div></article>)}</section>
     {filteredOffers.length === 0 && <div className="store-empty"><Beef /><h2>Nenhum corte encontrado</h2><p>Tente buscar por outro nome.</p></div>}
     <footer className="store-footer"><span><MapPin /> {catalog.store.name}</span><span>Pagamento na retirada ou entrega</span></footer>
     {cartOpen && <div className="drawer-backdrop" onClick={() => setCartOpen(false)}><aside className="cart-drawer" onClick={event => event.stopPropagation()}><div className="drawer-heading"><div><p className="store-section-kicker">Seu pedido</p><h2>Carrinho</h2></div><button className="icon-button" onClick={() => setCartOpen(false)} aria-label="Fechar carrinho"><X /></button></div>{cart.length === 0 ? <div className="cart-empty"><ShoppingBag /><p>Seu carrinho está vazio.</p></div> : <><div className="cart-lines">{cart.map(line => <div className="cart-line" key={line.offer.id}><div><strong>{line.offer.productName}</strong><span>{line.offer.preparationName}</span><small>{displayQuantity(line.quantity, line.offer.saleUnit)} · {money(line.offer.amountMinor, line.offer.currency)}/{line.offer.saleUnit === "G" ? "kg" : "un."}</small></div><div className="quantity-control"><button onClick={() => change(line.offer.id, -1)} aria-label="Diminuir quantidade"><Minus /></button><b>{line.offer.saleUnit === "G" ? `${(Number(line.quantity) / 1000).toLocaleString("pt-BR")} kg` : line.quantity}</b><button onClick={() => change(line.offer.id, 1)} aria-label="Aumentar quantidade"><Plus /></button><button className="remove-line" onClick={() => remove(line.offer.id)} aria-label="Remover item"><X /></button></div></div>)}</div><div className="cart-summary"><span>Estimativa</span><strong>{money(estimatedTotal)}</strong><small>O total final considera o peso separado no balcão.</small><button className="primary-button checkout-button" onClick={() => { setCartOpen(false); setCheckoutOpen(true) }}>Continuar <ArrowRight /></button></div></>}</aside></div>}

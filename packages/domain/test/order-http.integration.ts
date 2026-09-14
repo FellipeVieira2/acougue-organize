@@ -8,6 +8,33 @@ import { createOrderAuthorized } from '../src/ordering.ts';
 const base=process.env.APP_TEST_URL;
 const url=process.env.DATABASE_URL;
 if(!base||!['localhost','127.0.0.1'].includes(new URL(base).hostname)||!url||!new URL(url).pathname.endsWith('_test'))throw new Error('Use servidor local e banco com sufixo _test.');
+test('HTTP de estoque: publicação inicial, disputa, reservas e isolamento',async()=>{
+ const pool=new pg.Pool({connectionString:url,max:2});
+ const req=(path:string,body?:unknown,cookie?:string)=>fetch(`${base}/api/${path}`,{method:body===undefined?'GET':'POST',headers:{Origin:base!,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
+ try{
+  const login=await req('auth/register',{name:'Teste estoque',email:`stock-${randomUUID()}@example.test`,password:'senha-local-para-estoque'});assert.equal(login.status,200);
+  const cookie=login.headers.get('set-cookie')!.split(';')[0]!;
+  const identity=(await session(pool,cookie.split('=')[1]))!;
+  const tx=createTenantTransaction(pool);
+  const store=await tx(identity.organizationId,async c=>(await c.query('SELECT id,slug FROM app.store')).rows[0]);
+  const created=await req('products',{name:'Acém estoque',sku:'STOCK',stockUnit:'G',amountMinor:'3790',storeId:store.id},cookie);assert.equal(created.status,201);
+  const product=(await created.json()).id;
+  const input={storeId:store.id,productId:product,quantity:'5000',expectedVersion:null,reason:'Contagem inicial'};
+  assert.equal((await req('stock',input)).status,401);
+  const attempts=await Promise.all([req('stock',input,cookie),req('stock',input,cookie)]);assert.deepEqual(attempts.map(r=>r.status).sort(),[200,409]);
+  const catalog=await(await req(`public/stores/${store.slug}/catalog`)).json();assert.equal(catalog.offers.length,1);assert.equal(catalog.offers[0].displayOnly,false);assert.equal(catalog.offers[0].amountMinor,'3790');
+  const stock=(await(await req(`stock?storeId=${store.id}`,undefined,cookie)).json())[0];assert.equal(stock.quantity,'5000');
+  await tx(identity.organizationId,async c=>{await c.query('UPDATE app.inventory_balance SET reserved_qty=1000 WHERE store_id=$1',[store.id]);});
+  assert.equal((await req('stock',{...input,quantity:'999',expectedVersion:stock.version},cookie)).status,409);
+  assert.equal((await req('stock',{...input,quantity:'6000',expectedVersion:stock.version},cookie)).status,200);
+  const updated=(await(await req(`stock?storeId=${store.id}`,undefined,cookie)).json())[0];assert.equal(updated.reserved,'1000');
+  const other=await req('auth/register',{name:'Outra empresa',email:`stock-other-${randomUUID()}@example.test`,password:'senha-local-para-estoque'});const otherCookie=other.headers.get('set-cookie')!.split(';')[0]!;
+  assert.equal((await req(`stock?storeId=${store.id}`,undefined,otherCookie)).status,404);
+  await tx(identity.organizationId,async c=>{await c.query("UPDATE app.organization_membership SET role='VIEWER' WHERE actor_id=$1",[identity.actorId]);});
+  assert.equal((await req('stock',{...input,quantity:'7000',expectedVersion:updated.version},cookie)).status,403);
+  await tx(identity.organizationId,async c=>{assert.equal((await c.query("SELECT * FROM app.audit_log WHERE action='inventory.adjusted'")).rowCount,2);});
+ }finally{await pool.end();}
+});
 test('HTTP de pesagem: sessão, isolamento, permissão e consumo único',async()=>{
  const pool=new pg.Pool({connectionString:url,max:2});
  const req=(path:string,body?:unknown,cookie?:string)=>fetch(`${base}/api/${path}`,{method:body===undefined?'GET':'POST',headers:{Origin:base!,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});

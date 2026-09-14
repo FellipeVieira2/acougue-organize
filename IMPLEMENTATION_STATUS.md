@@ -1,5 +1,13 @@
 # Integração web e continuidade com a v0
 
+## Ajuste de estoque e espera da loja — 14/09/2026
+
+A aba Estoque agora lista até 200 produtos ativos da loja selecionada, com saldo físico, reserva e ajuste autorizado para gerente ou superior. O ajuste informa o saldo total em gramas/unidades, exige motivo e versão vigente, preserva reservas e registra movimento e auditoria na mesma transação. Quando não existe oferta, prepara item físico e oferta padrão com preço de venda online derivado do preço POS da loja; ofertas já ocultadas não são republicadas. Produtos com múltiplos estoques físicos por preparo exigem uma futura tela específica e ficam bloqueados neste formulário.
+
+O carregamento do catálogo público agora tem limite de 15 segundos, cancela consultas obsoletas e apresenta erro com Tentar novamente. Consulte a loja é um estado desabilitado para produtos sem oferta, sem ícone de adição.
+
+Verificação local: build e TypeScript aprovados; teste de validação do saldo aprovado; três fluxos HTTP aprovados, incluindo publicação inicial, disputa entre ajustes, preservação de reservas, isolamento entre empresas e bloqueio de consulta para escrita. Não houve migração ou ajuste de estoque remoto de teste.
+
 ## Situação atual — banco remoto em 14/09/2026
 
 Aplicadas no Neon conectado ao projeto Vercel as quatro migrações pendentes: `0005_butcher_catalog_inventory.sql`, `0006_orders.sql`, `0007_public_catalog.sql` e `0008_guest_checkout.sql`. A execução ocorreu em uma única transação, com bloqueio de migração, verificação dos cinco registros anteriores e SHA-256 de cada arquivo publicado antes da execução. Os arquivos originais e seus checksums foram preservados.
