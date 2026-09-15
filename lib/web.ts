@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { ApiError } from '../packages/domain/src/api.ts';
+import { isIP } from 'node:net';
 
 let pool: Pool | undefined;
 export function database(): Pool {
@@ -19,6 +20,16 @@ export function requireOrigin(request: Request): void {
     try { allowedOrigins.add(new URL(value.trim()).origin); } catch {}
   }
   if (!allowedOrigins.has(requestOrigin)) throw new ApiError(403, 'FORBIDDEN', 'Origem da solicitação não permitida.');
+}
+
+export function getTrustedClientIp(request: Request): string {
+  const candidates = [request.headers.get('x-real-ip')];
+  for (const candidate of candidates) {
+    const raw = candidate?.trim() ?? '';
+    const value = raw.startsWith('[') ? raw.slice(1, raw.indexOf(']')) : raw.split(':').length === 2 ? raw.split(':')[0] : raw;
+    if (value && isIP(value)) return value.toLowerCase();
+  }
+  return 'unknown';
 }
 
 export async function readBody(request: Request): Promise<Record<string, unknown>> {

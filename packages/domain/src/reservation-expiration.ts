@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { randomUUID } from "node:crypto";
 import { createTenantTransaction } from "./database.ts";
+import { cleanupRateLimitBuckets } from "./rate-limit.ts";
 
 const DEFAULT_BATCH_SIZE = 100;
 
@@ -103,6 +104,11 @@ export async function expireExpiredReservations(pool: Pool, batchSize = DEFAULT_
         metrics.failed += 1;
         console.error(JSON.stringify({ job: "expire-reservations", organizationId: organization.id, reservationId: reservation.id, error: error instanceof Error ? error.message : String(error) }));
       }
+    }
+    try {
+      await createTenantTransaction(pool)(organization.id, client => cleanupRateLimitBuckets(client));
+    } catch (error) {
+      console.error(JSON.stringify({ job: "expire-reservations", organizationId: organization.id, task: "rate-limit-cleanup", error: error instanceof Error ? error.message : String(error) }));
     }
   }
   return metrics;

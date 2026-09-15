@@ -7,24 +7,31 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
+  | "RATE_LIMITED"
   | "PRECONDITION_REQUIRED";
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: ApiErrorCode;
   readonly fieldErrors?: Record<string, string>;
+  readonly retryAfterSeconds?: number;
+  readonly rateLimitScope?: string;
 
   constructor(
     status: number,
     code: ApiErrorCode,
     message: string,
     fieldErrors?: Record<string, string>,
+    retryAfterSeconds?: number,
+    rateLimitScope?: string,
   ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     if (fieldErrors) this.fieldErrors = fieldErrors;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.rateLimitScope = rateLimitScope;
   }
 }
 

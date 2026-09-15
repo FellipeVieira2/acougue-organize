@@ -7,6 +7,7 @@ import { parseInteger, positive, priceByGrams, priceByUnits, sumMinor } from "./
 
 import { validateOfferQuantity } from "../../../lib/cart.ts";
 import { orderReservationTtlMinutes } from "./reservation-policy.ts";
+import { assertActiveOrderLimit, consumeRateLimit, normalizePhone, publicRateLimits } from "./rate-limit.ts";
 
 type PublicStore = { storeId: string; organizationId: string; storeName: string; storeSlug: string };
 type PublicOffer = {
@@ -88,10 +89,11 @@ export async function listPublicCatalog(pool: Pool, slug: string): Promise<{ sto
 }
 
 export type PublicQuoteInput = { offerId: string; requestedQty: string };
-export async function quotePublicCatalog(pool: Pool, slug: string, input: readonly PublicQuoteInput[]): Promise<{ currency: string; items: unknown[]; estimatedTotalMinor: string }> {
+export async function quotePublicCatalog(pool: Pool, slug: string, input: readonly PublicQuoteInput[], clientIp?: string): Promise<{ currency: string; items: unknown[]; estimatedTotalMinor: string }> {
   const store = await resolveStore(pool, slug);
   if (!Array.isArray(input) || input.length < 1 || input.length > 100) throw new ApiError(400, "VALIDATION_ERROR", "Informe entre 1 e 100 itens.");
   return createTenantTransaction(pool)(store.organizationId, async client => {
+    if (clientIp) await consumeRateLimit(client, store.organizationId, store.storeId, `ip:${clientIp}`, publicRateLimits.quoteIp);
     const ids = new Set<string>();
     const items: Array<{ offerId: string; requestedQty: string; estimatedTotalMinor: string; amountMinor: string; currency: string }> = [];
     for (const line of input) {
@@ -142,6 +144,7 @@ export type PublicCheckoutInput = {
   currency: string;
   customerNote?: string | null;
   items: readonly PublicCheckoutItem[];
+  clientIp?: string;
 };
 
 export async function createPublicOrder(pool: Pool, slug: string, input: PublicCheckoutInput): Promise<{ orderId: string; publicNumber: string; accessToken: string; estimatedTotalMinor: string }> {
@@ -152,7 +155,7 @@ export async function createPublicOrder(pool: Pool, slug: string, input: PublicC
   if (!/^[a-f0-9]{64}$/.test(input.requestHash)) throw new ApiError(400, "VALIDATION_ERROR", "Hash da requisição inválido.");
   if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > 100) throw new ApiError(400, "VALIDATION_ERROR", "Informe entre 1 e 100 itens.");
   const customerName = requiredText(input.customerName, "customerName", 200);
-  const customerPhone = requiredText(input.customerPhone, "customerPhone", 40);
+  const customerPhone = normalizePhone(requiredText(input.customerPhone, "customerPhone", 40));
   if (input.fulfillmentType !== "PICKUP" && input.fulfillmentType !== "DELIVERY") throw new ApiError(400, "VALIDATION_ERROR", "Tipo de atendimento inválido.");
   if (!/^[A-Z]{3}$/.test(input.currency)) throw new ApiError(400, "VALIDATION_ERROR", "Moeda inválida.");
   const scopedKey = hash(`${store.storeId}:${input.idempotencyKey}`);
@@ -173,6 +176,13 @@ export async function createPublicOrder(pool: Pool, slug: string, input: PublicC
       const existing = await client.query<{ estimatedTotalMinor: string }>(`SELECT estimated_total_minor::text AS "estimatedTotalMinor" FROM app.sales_order WHERE organization_id=$1 AND id=$2`, [store.organizationId, record.orderId]);
       return { orderId: record.orderId, publicNumber: record.publicNumber, accessToken: token, estimatedTotalMinor: existing.rows[0]?.estimatedTotalMinor ?? "0" };
     }
+    if (input.clientIp) {
+      await consumeRateLimit(client, store.organizationId, store.storeId, `ip:${input.clientIp}`, publicRateLimits.checkoutIpBurst);
+      await consumeRateLimit(client, store.organizationId, store.storeId, `ip:${input.clientIp}`, publicRateLimits.checkoutIpHour);
+    }
+    await consumeRateLimit(client, store.organizationId, store.storeId, `customer:${customerPhone}`, publicRateLimits.checkoutCustomer);
+    await consumeRateLimit(client, store.organizationId, store.storeId, "store", publicRateLimits.checkoutStore);
+    await assertActiveOrderLimit(client, store.organizationId, store.storeId, customerPhone);
 
     const ids = new Set<string>();
     const offerIds = new Set<string>();
@@ -229,6 +239,11 @@ export async function getPublicOrder(pool: Pool, slug: string, publicNumber: str
     const items = await client.query(`SELECT id, product_name_snapshot AS "productName", preparation_name_snapshot AS "preparationName", requested_qty::text AS "requestedQty", final_qty::text AS "finalQty", estimated_total_minor::text AS "estimatedTotalMinor", final_total_minor::text AS "finalTotalMinor", status FROM app.order_item WHERE organization_id=$1 AND order_id=(SELECT id FROM app.sales_order WHERE organization_id=$1 AND public_number=$2 AND public_access_token_hash=$3) ORDER BY created_at,id`, [store.organizationId, publicNumber, tokenHash]);
     return { ...found, items: items.rows };
   });
+}
+
+export async function limitPublicApproval(pool: Pool, slug: string, clientIp: string): Promise<void> {
+  const store = await resolveStore(pool, slug);
+  await createTenantTransaction(pool)(store.organizationId, client => consumeRateLimit(client, store.organizationId, store.storeId, `ip:${clientIp}`, publicRateLimits.approvalIp));
 }
 
 export async function approvePublicOrderItem(pool: Pool, slug: string, publicNumber: string, token: string, orderItemId: string): Promise<{ finalTotalMinor: string | null }> {

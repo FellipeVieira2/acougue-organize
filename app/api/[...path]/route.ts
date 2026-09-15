@@ -7,8 +7,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { ApiError, apiErrorResponse, parseCreateProductRequest, parseCreatePriceRequest } from '../../../packages/domain/src/api.ts';
 import { withMembershipTransaction } from '../../../packages/domain/src/membership.ts';
 import { login, logout, register, session, SESSION_SECONDS } from '../../../lib/auth.ts';
-import { database, readBody, requireOrigin, strictBody } from '../../../lib/web.ts';
-import { approvePublicOrderItem, createPublicOrder, getPublicOrder, listPublicCatalog, quotePublicCatalog } from '../../../packages/domain/src/public-catalog.ts';
+import { database, getTrustedClientIp, readBody, requireOrigin, strictBody } from '../../../lib/web.ts';
+import { approvePublicOrderItem, createPublicOrder, getPublicOrder, limitPublicApproval, listPublicCatalog, quotePublicCatalog } from '../../../packages/domain/src/public-catalog.ts';
 import { canTransitionOrder } from '../../../packages/domain/src/orders.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { expireExpiredReservations } from '../../../packages/domain/src/reservation-expiration.ts';
@@ -59,6 +59,8 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       const body = await readBody(request);
       strictBody(body, ['orderItemId']);
       if (typeof body.orderItemId !== 'string') throw new ApiError(400, 'VALIDATION_ERROR', 'Item inválido.');
+      const clientIp = getTrustedClientIp(request);
+      await limitPublicApproval(database(), decodeURIComponent(publicOrderApproveMatch[1]!), clientIp);
       return json(await approvePublicOrderItem(database(), decodeURIComponent(publicOrderApproveMatch[1]!), decodeURIComponent(publicOrderApproveMatch[2]!), accessToken, body.orderItemId));
     }
     if (publicQuoteMatch && request.method === 'POST') {
@@ -66,7 +68,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       const body = await readBody(request);
       strictBody(body, ['items']);
       if (!Array.isArray(body.items)) throw new ApiError(400, 'VALIDATION_ERROR', 'Informe os itens da cotação.');
-      return json(await quotePublicCatalog(database(), decodeURIComponent(publicQuoteMatch[1]!), body.items as { offerId: string; requestedQty: string }[]));
+      return json(await quotePublicCatalog(database(), decodeURIComponent(publicQuoteMatch[1]!), body.items as { offerId: string; requestedQty: string }[], getTrustedClientIp(request)));
     }
     if (publicOrderMatch && request.method === 'POST') {
       requireOrigin(request);
@@ -83,7 +85,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
       });
       return json(await createPublicOrder(database(), decodeURIComponent(publicOrderMatch[1]!), {
         idempotencyKey, requestHash, orderId: randomUUID(), customerName: body.customerName as string, customerPhone: body.customerPhone as string,
-        fulfillmentType: body.fulfillmentType as 'PICKUP' | 'DELIVERY', currency: body.currency as string, customerNote: (body.customerNote ?? null) as string | null, items,
+        fulfillmentType: body.fulfillmentType as 'PICKUP' | 'DELIVERY', currency: body.currency as string, customerNote: (body.customerNote ?? null) as string | null, items, clientIp: getTrustedClientIp(request),
       }), 201);
     }
     if (request.method === 'POST') {
@@ -190,12 +192,17 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     }
     throw new ApiError(404, 'NOT_FOUND', 'Rota não encontrada.');
   } catch (error) {
+    if (error instanceof ApiError && error.code === 'RATE_LIMITED') {
+      console.log(JSON.stringify({ event: 'public_rate_limited', scope: error.rateLimitScope ?? 'unknown', requestId, path: request.nextUrl.pathname }));
+    }
     if (typeof error === 'object' && error !== null && 'code' in error && (error.code === '42P01' || error.code === '42883')) {
       return json({ error: { code: 'PRECONDITION_REQUIRED', message: 'O catálogo público ainda não foi ativado neste banco.', requestId } }, 503);
     }
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') return json({ error: { message: 'Esse código já está cadastrado. Use outro SKU.', requestId } }, 409);
     const result = apiErrorResponse(error, requestId);
-    return json(result.body, result.status);
+    const response = json(result.body, result.status);
+    if (error instanceof ApiError && error.retryAfterSeconds) response.headers.set('Retry-After', String(error.retryAfterSeconds));
+    return response;
   }
 }
 
