@@ -93,6 +93,52 @@ export async function createCatalogOfferAuthorized(pool: Pool, actorId: string, 
   });
 }
 
+export async function publishCatalogOfferAuthorized(pool: Pool, actorId: string, organizationId: string, offerId: string): Promise<void> {
+  requireUuid(organizationId, "organizationId");
+  requireUuid(offerId, "offerId");
+  requireUuid(actorId, "actorId");
+  await withMembershipTransaction(pool, organizationId, actorId, "MANAGER", async client => {
+    const offer = await client.query<{ saleUnit: string; minWeightG: string | null; maxWeightG: string | null; weightStepG: string | null; defaultWeightG: string | null; publicVisible: boolean; productId: string; inventoryItemId: string }>(`SELECT o.id, o.sale_unit AS "saleUnit", o.min_weight_g AS "minWeightG", o.max_weight_g AS "maxWeightG", o.weight_step_g AS "weightStepG", o.default_weight_g AS "defaultWeightG", o.public_visible AS "publicVisible", o.product_id AS "productId", o.inventory_item_id AS "inventoryItemId"
+      FROM app.catalog_offer o
+      WHERE o.organization_id = $1 AND o.id = $2 AND o.active = true`, [organizationId, offerId]);
+    if (!offer.rows[0]) throw new ApiError(404, "NOT_FOUND", "Oferta de catálogo não encontrada.");
+
+    const current = offer.rows[0];
+    if (current.publicVisible) return;
+
+    const storefrontPrice = await client.query<{ amount_minor: string }>(`SELECT amount_minor FROM app.product_price
+      WHERE organization_id = $1 AND product_id = $2 AND store_id = (SELECT id FROM app.store WHERE organization_id = $1 AND active = true ORDER BY created_at, id LIMIT 1)
+        AND channel = 'STOREFRONT' ORDER BY revision DESC LIMIT 1`, [organizationId, current.productId]);
+    if (!storefrontPrice.rows[0] || BigInt(storefrontPrice.rows[0].amount_minor) <= 0n) {
+      throw new ApiError(409, "CONFLICT", "Oferta incompleta: falta preço STOREFRONT para publicação.");
+    }
+    if (current.saleUnit === "G") {
+      if (!current.minWeightG || !current.maxWeightG || !current.weightStepG || !current.defaultWeightG) {
+        throw new ApiError(409, "CONFLICT", "Oferta por peso incompleta: faltam mínimo, máximo, incremento ou peso padrão.");
+      }
+      if (BigInt(current.minWeightG) > BigInt(current.defaultWeightG) || BigInt(current.defaultWeightG) > BigInt(current.maxWeightG)) {
+        throw new ApiError(409, "CONFLICT", "Peso padrão fora da faixa válida desta oferta.");
+      }
+    }
+    await client.query(`UPDATE app.catalog_offer SET public_visible = true, updated_at = now() WHERE organization_id = $1 AND id = $2`, [organizationId, offerId]);
+    await client.query(`INSERT INTO app.audit_log(id, organization_id, actor_id, action, entity_id, correlation_id, reason)
+      VALUES ($1, $2, $3, 'catalog_offer.published', $4, $5, 'Publicação explícita do catálogo')`, [randomUUID(), organizationId, actorId, offerId, randomUUID()]);
+  });
+}
+
+export async function unpublishCatalogOfferAuthorized(pool: Pool, actorId: string, organizationId: string, offerId: string): Promise<void> {
+  requireUuid(organizationId, "organizationId");
+  requireUuid(offerId, "offerId");
+  requireUuid(actorId, "actorId");
+  await withMembershipTransaction(pool, organizationId, actorId, "MANAGER", async client => {
+    const offer = await client.query<{ id: string }>(`SELECT id FROM app.catalog_offer WHERE organization_id = $1 AND id = $2 AND active = true`, [organizationId, offerId]);
+    if (!offer.rows[0]) throw new ApiError(404, "NOT_FOUND", "Oferta de catálogo não encontrada.");
+    await client.query(`UPDATE app.catalog_offer SET public_visible = false, updated_at = now() WHERE organization_id = $1 AND id = $2`, [organizationId, offerId]);
+    await client.query(`INSERT INTO app.audit_log(id, organization_id, actor_id, action, entity_id, correlation_id, reason)
+      VALUES ($1, $2, $3, 'catalog_offer.unpublished', $4, $5, 'Ocultação explícita do catálogo')`, [randomUUID(), organizationId, actorId, offerId, randomUUID()]);
+  });
+}
+
 export async function adjustInventoryAuthorized(pool: Pool, input: InventoryAdjustmentInput): Promise<void> {
   requireUuid(input.organizationId, "organizationId");
   requireUuid(input.storeId, "storeId");
@@ -190,6 +236,8 @@ export {
   createPreparationOptionAuthorized as createPreparationOptionWithPermission,
   createInventoryItemAuthorized as createInventoryItemWithPermission,
   createCatalogOfferAuthorized as createCatalogOfferWithPermission,
+  publishCatalogOfferAuthorized as publishCatalogOfferWithPermission,
+  unpublishCatalogOfferAuthorized as unpublishCatalogOfferWithPermission,
   adjustInventoryAuthorized as adjustInventoryWithPermission,
   reserveInventoryAuthorized as reserveInventoryWithPermission,
 };

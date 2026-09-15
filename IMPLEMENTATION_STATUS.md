@@ -2,7 +2,7 @@
 
 ## Ajuste de estoque e espera da loja — 14/09/2026
 
-A aba Estoque agora lista até 200 produtos ativos da loja selecionada, com saldo físico, reserva e ajuste autorizado para gerente ou superior. O ajuste informa o saldo total em gramas/unidades, exige motivo e versão vigente, preserva reservas e registra movimento e auditoria na mesma transação. Quando não existe oferta, prepara item físico e oferta padrão com preço de venda online derivado do preço POS da loja; ofertas já ocultadas não são republicadas. Produtos com múltiplos estoques físicos por preparo exigem uma futura tela específica e ficam bloqueados neste formulário.
+A aba Estoque agora lista até 200 produtos ativos da loja selecionada, com saldo físico, reserva e ajuste autorizado para gerente ou superior. O ajuste informa o saldo total em gramas/unidades, exige motivo e versão vigente, preserva reservas e registra movimento e auditoria na mesma transação. O fluxo de estoque foi separado da publicação online: um ajuste de saldo cria apenas o item físico necessário e o saldo, sem criar oferta pública, preparo padrão, visibilidade nem preço de storefront. Produtos com múltiplos estoques físicos por preparo exigem uma futura tela específica e ficam bloqueados neste formulário.
 
 O carregamento do catálogo público agora tem limite de 15 segundos, cancela consultas obsoletas e apresenta erro com Tentar novamente. Consulte a loja é um estado desabilitado para produtos sem oferta, sem ícone de adição.
 

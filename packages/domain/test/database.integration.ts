@@ -6,8 +6,9 @@ import pg from 'pg';
 import { applyMigrations } from '../src/migrations.ts';
 import { createOrganizationWithStore } from '../src/onboarding.ts';
 import { addMembership, getMembership, withMembershipTransaction } from '../src/membership.ts';
-import { appendProductPriceAuthorized, createProductAuthorized } from '../src/catalog.ts';
+import { appendProductPriceAuthorized, createCatalogOfferAuthorized, createProductAuthorized, publishCatalogOfferAuthorized, unpublishCatalogOfferAuthorized } from '../src/catalog.ts';
 import { digest, login, logout, register, session } from '../../../lib/auth.ts';
+import { setStock } from '../../../lib/stock.ts';
 
 const url = process.env.DATABASE_TEST_URL;
 if (!url) throw new Error('DATABASE_TEST_URL é obrigatória; testes de banco não podem ser ignorados.');
@@ -117,6 +118,178 @@ test('preço negativo é rejeitado e revisão válida permanece histórica', asy
   });
   await assert.rejects(inTenant(tenantA, async client => { await client.query('UPDATE app.product_price SET amount_minor=1'); }),
     (error: unknown) => error instanceof pg.DatabaseError && error.code === '42501');
+});
+
+test('ajuste de estoque cria apenas item físico e não publica o catálogo', async () => {
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const storeId = randomUUID();
+  const productId = randomUUID();
+  await createOrganizationWithStore(pool, {
+    organizationId,
+    actorId,
+    storeId,
+    auditId: randomUUID(),
+    correlationId: randomUUID(),
+    name: 'Estoque isolado',
+    storeName: 'Loja Isolada',
+    storeSlug: `isolada-${organizationId}`,
+  });
+  await createProductAuthorized(pool, actorId, {
+    id: productId,
+    organizationId,
+    sku: 'EST-001',
+    name: 'Picanha',
+    stockUnit: 'G',
+    saleStrategy: 'WEIGHT_FREE',
+  });
+
+  await setStock(pool, { actorId, organizationId, email: 'gerente@example.test' }, {
+    storeId,
+    productId,
+    quantity: '30000',
+    expectedVersion: null,
+    reason: 'Recebimento inicial',
+  }, randomUUID());
+
+  await inTenant(organizationId, async client => {
+    assert.equal((await client.query('SELECT count(*)::int AS total FROM app.inventory_item WHERE organization_id = $1', [organizationId])).rows[0].total, 1);
+    assert.equal((await client.query('SELECT count(*)::int AS total FROM app.catalog_offer WHERE organization_id = $1', [organizationId])).rows[0].total, 0);
+    assert.equal((await client.query('SELECT count(*)::int AS total FROM app.product_price WHERE organization_id = $1 AND store_id = $2 AND channel = $3', [organizationId, storeId, 'STOREFRONT'])).rows[0].total, 0);
+    assert.equal((await client.query('SELECT on_hand_qty::text AS qty FROM app.inventory_balance WHERE organization_id = $1 AND store_id = $2', [organizationId, storeId])).rows[0].qty, '30000');
+  });
+});
+
+test('publicação online é explícita e não altera estoque', async () => {
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const storeId = randomUUID();
+  const productId = randomUUID();
+  const inventoryItemId = randomUUID();
+  const preparationOptionId = randomUUID();
+  const offerId = randomUUID();
+  await createOrganizationWithStore(pool, {
+    organizationId,
+    actorId,
+    storeId,
+    auditId: randomUUID(),
+    correlationId: randomUUID(),
+    name: 'Catálogo explícito',
+    storeName: 'Loja do catálogo',
+    storeSlug: `catalog-${organizationId}`,
+  });
+  await createProductAuthorized(pool, actorId, { id: productId, organizationId, sku: 'CAT-001', name: 'Picanha', stockUnit: 'G', saleStrategy: 'WEIGHT_FREE' });
+  await inTenant(organizationId, async client => {
+    await client.query("INSERT INTO app.inventory_item(id, organization_id, name, sku, base_unit) VALUES ($1, $2, 'Picanha física', 'INV-CAT', 'G')", [inventoryItemId, organizationId]);
+    await client.query("INSERT INTO app.preparation_option(id, organization_id, code, name) VALUES ($1, $2, 'CAT', 'Peça inteira')", [preparationOptionId, organizationId]);
+    await client.query("INSERT INTO app.product_price(id, organization_id, store_id, product_id, channel, amount_minor, currency, revision) VALUES ($1, $2, $3, $4, 'POS', 6990, 'BRL', 1)", [randomUUID(), organizationId, storeId, productId]);
+    await client.query("INSERT INTO app.product_price(id, organization_id, store_id, product_id, channel, amount_minor, currency, revision) VALUES ($1, $2, $3, $4, 'STOREFRONT', 7990, 'BRL', 1)", [randomUUID(), organizationId, storeId, productId]);
+    await client.query("INSERT INTO app.inventory_balance(id, organization_id, store_id, inventory_item_id, on_hand_qty) VALUES ($1, $2, $3, $4, 30000)", [randomUUID(), organizationId, storeId, inventoryItemId]);
+  });
+
+  await createCatalogOfferAuthorized(pool, actorId, {
+    id: offerId,
+    organizationId,
+    productId,
+    inventoryItemId,
+    preparationOptionId,
+    sku: 'CAT-OFFER',
+    saleUnit: 'G',
+    minWeightG: '250',
+    maxWeightG: '5000',
+    weightStepG: '100',
+    defaultWeightG: '1000',
+  });
+
+  await assert.rejects(() => publishCatalogOfferAuthorized(pool, actorId, organizationId, offerId), /FALTA|incompleta|CONFLICT/);
+
+  await inTenant(organizationId, async client => {
+    await client.query("UPDATE app.product_price SET amount_minor = 7990 WHERE organization_id = $1 AND product_id = $2 AND channel = 'STOREFRONT'", [organizationId, productId]);
+    assert.equal((await client.query('SELECT on_hand_qty::text AS qty FROM app.inventory_balance WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3', [organizationId, storeId, inventoryItemId])).rows[0].qty, '30000');
+  });
+
+  await publishCatalogOfferAuthorized(pool, actorId, organizationId, offerId);
+  await inTenant(organizationId, async client => {
+    assert.equal((await client.query('SELECT public_visible FROM app.catalog_offer WHERE id = $1', [offerId])).rows[0].public_visible, true);
+    assert.equal((await client.query('SELECT on_hand_qty::text AS qty FROM app.inventory_balance WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3', [organizationId, storeId, inventoryItemId])).rows[0].qty, '30000');
+  });
+
+  await unpublishCatalogOfferAuthorized(pool, actorId, organizationId, offerId);
+  await inTenant(organizationId, async client => {
+    assert.equal((await client.query('SELECT public_visible FROM app.catalog_offer WHERE id = $1', [offerId])).rows[0].public_visible, false);
+    assert.equal((await client.query('SELECT on_hand_qty::text AS qty FROM app.inventory_balance WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3', [organizationId, storeId, inventoryItemId])).rows[0].qty, '30000');
+  });
+});
+
+test('catálogo público só expõe oferta explicitamente publicada', async () => {
+  const { listPublicCatalog } = await import('../src/public-catalog.ts');
+  const organizationId = randomUUID();
+  const actorId = randomUUID();
+  const storeId = randomUUID();
+  const productId = randomUUID();
+  const inventoryItemId = randomUUID();
+  const preparationOptionId = randomUUID();
+  const offerId = randomUUID();
+  const slug = `catalog-public-${organizationId}`;
+
+  await createOrganizationWithStore(pool, {
+    organizationId,
+    actorId,
+    storeId,
+    auditId: randomUUID(),
+    correlationId: randomUUID(),
+    name: 'Visibilidade pública',
+    storeName: 'Loja pública',
+    storeSlug: slug,
+  });
+
+  await createProductAuthorized(pool, actorId, {
+    id: productId,
+    organizationId,
+    sku: 'PUB-001',
+    name: 'Picanha visível',
+    stockUnit: 'G',
+    saleStrategy: 'WEIGHT_FREE',
+  });
+
+  await inTenant(organizationId, async client => {
+    await client.query("INSERT INTO app.inventory_item(id, organization_id, name, sku, base_unit) VALUES ($1, $2, 'Picanha física', 'INV-PUB-1', 'G')", [inventoryItemId, organizationId]);
+    await client.query("INSERT INTO app.preparation_option(id, organization_id, code, name) VALUES ($1, $2, 'PUBP', 'Peça inteira')", [preparationOptionId, organizationId]);
+    await client.query("INSERT INTO app.product_price(id, organization_id, store_id, product_id, channel, amount_minor, currency, revision) VALUES ($1, $2, $3, $4, 'POS', 6990, 'BRL', 1)", [randomUUID(), organizationId, storeId, productId]);
+    await client.query("INSERT INTO app.product_price(id, organization_id, store_id, product_id, channel, amount_minor, currency, revision) VALUES ($1, $2, $3, $4, 'STOREFRONT', 7990, 'BRL', 1)", [randomUUID(), organizationId, storeId, productId]);
+    await client.query("INSERT INTO app.inventory_balance(id, organization_id, store_id, inventory_item_id, on_hand_qty) VALUES ($1, $2, $3, $4, 30000)", [randomUUID(), organizationId, storeId, inventoryItemId]);
+  });
+
+  const emptyCatalog = await listPublicCatalog(pool, slug);
+  assert.equal(emptyCatalog.offers.length, 0);
+
+  await createCatalogOfferAuthorized(pool, actorId, {
+    id: offerId,
+    organizationId,
+    productId,
+    inventoryItemId,
+    preparationOptionId,
+    sku: 'PUB-OFFER',
+    saleUnit: 'G',
+    minWeightG: '250',
+    maxWeightG: '5000',
+    weightStepG: '100',
+    defaultWeightG: '1000',
+  });
+
+  const hiddenCatalog = await listPublicCatalog(pool, slug);
+  assert.equal(hiddenCatalog.offers.filter((offer) => offer.productId === productId).length, 0);
+
+  await publishCatalogOfferAuthorized(pool, actorId, organizationId, offerId);
+
+  const publishedCatalog = await listPublicCatalog(pool, slug);
+  assert.equal(publishedCatalog.offers.length, 1);
+  assert.equal(publishedCatalog.offers[0]?.productId, productId);
+  assert.equal(publishedCatalog.offers[0]?.offerName, 'PUB-OFFER');
+
+  await inTenant(organizationId, async client => {
+    assert.equal((await client.query('SELECT on_hand_qty::text AS qty FROM app.inventory_balance WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3', [organizationId, storeId, inventoryItemId])).rows[0].qty, '30000');
+  });
 });
 
 test('auditoria é append-only para a role de aplicação', async () => {

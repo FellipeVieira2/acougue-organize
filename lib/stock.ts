@@ -23,10 +23,12 @@ export async function listStock(pool: Pool, identity: Session, storeId: string) 
   return withMembershipTransaction(pool,identity.organizationId,identity.actorId,'VIEWER',async c=>{
     if (!(await c.query('SELECT id FROM app.store WHERE id=$1 AND active=true',[storeId])).rowCount) throw new ApiError(404,'NOT_FOUND','Loja ativa não encontrada.');
     return (await c.query(`SELECT p.id,p.name,p.stock_unit AS unit,
-      count(DISTINCT o.inventory_item_id)::integer AS "inventoryCount",
-      max(b.on_hand_qty)::text AS quantity,max(b.reserved_qty)::text AS reserved,max(b.version)::text AS version
-      FROM app.product p LEFT JOIN app.catalog_offer o ON o.organization_id=p.organization_id AND o.product_id=p.id
-      LEFT JOIN app.inventory_balance b ON b.organization_id=o.organization_id AND b.inventory_item_id=o.inventory_item_id AND b.store_id=$1
+      count(DISTINCT COALESCE(o.inventory_item_id, inv.id))::integer AS "inventoryCount",
+      max(COALESCE(b.on_hand_qty,0))::text AS quantity,max(COALESCE(b.reserved_qty,0))::text AS reserved,max(COALESCE(b.version,1))::text AS version
+      FROM app.product p
+      LEFT JOIN app.catalog_offer o ON o.organization_id=p.organization_id AND o.product_id=p.id AND o.active=true
+      LEFT JOIN app.inventory_item inv ON inv.organization_id=p.organization_id AND inv.active=true AND inv.sku = ('WEB-' || p.id)
+      LEFT JOIN app.inventory_balance b ON b.organization_id=p.organization_id AND b.store_id=$1 AND b.inventory_item_id = COALESCE(o.inventory_item_id, inv.id)
       WHERE p.active=true GROUP BY p.id ORDER BY p.name,p.id LIMIT 200`,[storeId])).rows;
   });
 }
@@ -36,30 +38,25 @@ export async function setStock(pool: Pool,identity:Session,body:Record<string,un
     if (!(await c.query('SELECT id FROM app.store WHERE id=$1 AND active=true FOR SHARE',[input.storeId])).rowCount) throw new ApiError(404,'NOT_FOUND','Loja ativa não encontrada.');
     const p=(await c.query('SELECT id,name,stock_unit FROM app.product WHERE id=$1 AND active=true FOR UPDATE',[input.productId])).rows[0];
     if (!p) throw new ApiError(404,'NOT_FOUND','Produto ativo não encontrado.');
+
+    const inventorySku = `WEB-${p.id}`;
     const ids=(await c.query('SELECT DISTINCT inventory_item_id AS id FROM app.catalog_offer WHERE product_id=$1',[p.id])).rows;
     if (ids.length>1) throw new ApiError(409,'CONFLICT','Este produto possui estoques diferentes por preparo. O ajuste precisa identificar o estoque físico.');
+
     let inventoryId=ids[0]?.id;
     if (!inventoryId) {
-      inventoryId=randomUUID();
-      await c.query('INSERT INTO app.inventory_item(id,organization_id,name,sku,base_unit) VALUES ($1,$2,$3,$4,$5)',[inventoryId,identity.organizationId,p.name,`WEB-${inventoryId}`,p.stock_unit]);
-      await c.query("INSERT INTO app.preparation_option(id,organization_id,code,name) VALUES ($1,$2,'WEB_STANDARD','Peça') ON CONFLICT (organization_id,code) DO NOTHING",[randomUUID(),identity.organizationId]);
-      const prep=(await c.query("SELECT id FROM app.preparation_option WHERE code='WEB_STANDARD' AND active=true")).rows[0];
-      if (!prep) throw new ApiError(409,'CONFLICT','O preparo padrão está inativo.');
-      await c.query('INSERT INTO app.catalog_offer(id,organization_id,product_id,inventory_item_id,preparation_option_id,sku,sale_unit,public_visible) VALUES ($1,$2,$3,$4,$5,$6,$7,true)',[randomUUID(),identity.organizationId,p.id,inventoryId,prep.id,`WEB-${p.id}`,p.stock_unit]);
-      await c.query(`INSERT INTO app.product_price(id,organization_id,store_id,product_id,channel,amount_minor,currency,revision)
-        SELECT $1,$2,$3,$4,'STOREFRONT',amount_minor,currency,1 FROM app.product_price
-        WHERE product_id=$4 AND store_id=$3 AND channel='POS'
-          AND NOT EXISTS(SELECT 1 FROM app.product_price WHERE product_id=$4 AND store_id=$3 AND channel='STOREFRONT')
-        ORDER BY revision DESC LIMIT 1`,[randomUUID(),identity.organizationId,input.storeId,p.id]);
+      const existing=(await c.query('SELECT id, base_unit, active FROM app.inventory_item WHERE organization_id=$1 AND sku=$2 FOR SHARE',[identity.organizationId,inventorySku])).rows[0];
+      if (existing) {
+        inventoryId=existing.id;
+      } else {
+        inventoryId=randomUUID();
+        await c.query('INSERT INTO app.inventory_item(id,organization_id,name,sku,base_unit) VALUES ($1,$2,$3,$4,$5)',[inventoryId,identity.organizationId,p.name,inventorySku,p.stock_unit]);
+      }
     }
+
     const inv=(await c.query('SELECT base_unit,active FROM app.inventory_item WHERE id=$1 FOR SHARE',[inventoryId])).rows[0];
     if (!inv?.active || inv.base_unit!==p.stock_unit) throw new ApiError(409,'CONFLICT','Estoque físico inativo ou unidade incompatível.');
-    // An existing offer can also be stocked in a second store with its own POS price.
-    await c.query(`INSERT INTO app.product_price(id,organization_id,store_id,product_id,channel,amount_minor,currency,revision)
-      SELECT $1,$2,$3,$4,'STOREFRONT',amount_minor,currency,1 FROM app.product_price
-      WHERE product_id=$4 AND store_id=$3 AND channel='POS'
-        AND NOT EXISTS(SELECT 1 FROM app.product_price WHERE product_id=$4 AND store_id=$3 AND channel='STOREFRONT')
-      ORDER BY revision DESC LIMIT 1`,[randomUUID(),identity.organizationId,input.storeId,p.id]);
+
     const balance=(await c.query('SELECT on_hand_qty,reserved_qty,version FROM app.inventory_balance WHERE store_id=$1 AND inventory_item_id=$2 FOR UPDATE',[input.storeId,inventoryId])).rows[0];
     if ((balance?.version??null)!==input.expectedVersion) throw new ApiError(409,'CONFLICT','O estoque mudou. Atualize a lista antes de ajustar.');
     if (input.quantity<BigInt(balance?.reserved_qty??'0')) throw new ApiError(409,'CONFLICT','O saldo não pode ser menor que a quantidade reservada em pedidos.');

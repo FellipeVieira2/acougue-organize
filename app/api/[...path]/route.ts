@@ -4,11 +4,12 @@ import { cancelOrderAuthorized, completeDeliveryAuthorized, completePickupAuthor
 import { NextRequest, NextResponse } from 'next/server.js';
 import { updateProduct } from '../../../lib/products.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { ApiError, apiErrorResponse, parseCreateProductRequest, parseCreatePriceRequest } from '../../../packages/domain/src/api.ts';
+import { ApiError, apiErrorResponse, parseCreateProductRequest, parseCreatePriceRequest, parseCreateCatalogOfferRequest } from '../../../packages/domain/src/api.ts';
 import { withMembershipTransaction } from '../../../packages/domain/src/membership.ts';
 import { login, logout, register, session, SESSION_SECONDS } from '../../../lib/auth.ts';
 import { database, getTrustedClientIp, readBody, requireOrigin, strictBody } from '../../../lib/web.ts';
 import { approvePublicOrderItem, createPublicOrder, getPublicOrder, limitPublicApproval, listPublicCatalog, quotePublicCatalog } from '../../../packages/domain/src/public-catalog.ts';
+import { createCatalogOfferAuthorized, publishCatalogOfferAuthorized, unpublishCatalogOfferAuthorized } from '../../../packages/domain/src/catalog.ts';
 import { canTransitionOrder } from '../../../packages/domain/src/orders.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { expireExpiredReservations } from '../../../packages/domain/src/reservation-expiration.ts';
@@ -150,6 +151,34 @@ async function handle(request: NextRequest): Promise<NextResponse> {
           await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1,$2,$3,$4,$5::jsonb,$6)`, [randomUUID(), identity.organizationId, orderStatusMatch[1], `ORDER_${status}`, JSON.stringify({ from, to: status }), identity.actorId]);
           return { id: orderStatusMatch[1], fulfillmentStatus: status };
         }));
+      }
+      const catalogOfferMatch = /^\/api\/catalog\/offers$/.exec(path);
+      if (catalogOfferMatch && request.method === 'POST') {
+        const payload = parseCreateCatalogOfferRequest({
+          id: randomUUID(),
+          organizationId: identity.organizationId,
+          productId: body.productId,
+          inventoryItemId: body.inventoryItemId,
+          preparationOptionId: body.preparationOptionId,
+          sku: body.sku,
+          saleUnit: body.saleUnit,
+          minWeightG: body.minWeightG ?? null,
+          maxWeightG: body.maxWeightG ?? null,
+          weightStepG: body.weightStepG ?? null,
+          defaultWeightG: body.defaultWeightG ?? null,
+        });
+        await createCatalogOfferAuthorized(database(), identity.actorId, payload);
+        return json({ ok: true, id: payload.id }, 201);
+      }
+      const catalogOfferPublishMatch = /^\/api\/catalog\/offers\/([^/]+)\/publish$/.exec(path);
+      if (catalogOfferPublishMatch) {
+        await publishCatalogOfferAuthorized(database(), identity.actorId, identity.organizationId, catalogOfferPublishMatch[1]!);
+        return json({ ok: true });
+      }
+      const catalogOfferUnpublishMatch = /^\/api\/catalog\/offers\/([^/]+)\/unpublish$/.exec(path);
+      if (catalogOfferUnpublishMatch) {
+        await unpublishCatalogOfferAuthorized(database(), identity.actorId, identity.organizationId, catalogOfferUnpublishMatch[1]!);
+        return json({ ok: true });
       }
       if (path === '/api/stock') return json(await setStock(database(),identity,body,requestId));
       const productMatch = /^\/api\/products\/([^/]+)$/.exec(path);
