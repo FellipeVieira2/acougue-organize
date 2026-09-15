@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { ApiError, parseCreateCatalogOfferRequest, parseCreateInventoryItemRequest, parseCreatePreparationOptionRequest, parseCreatePriceRequest, parseCreateProductRequest, parseCreateStoreRequest, type CreateCatalogOfferRequest, type CreateInventoryItemRequest, type CreatePreparationOptionRequest, type CreatePriceRequest, type CreateProductRequest, type CreateStoreRequest } from "./api.ts";
 import { withMembershipTransaction } from "./membership.ts";
 import { parseInteger, positive } from "./quantities.ts";
+import { orderReservationTtlMinutes } from "./reservation-policy.ts";
 
 export type CatalogProductInput = CreateProductRequest;
 export type CatalogStoreInput = CreateStoreRequest;
@@ -143,8 +144,8 @@ export async function reserveInventoryAuthorized(pool: Pool, actorId: string, in
     if (result.rowCount !== 1) throw new ApiError(409, "CONFLICT", "Insufficient available inventory");
     await client.query(`INSERT INTO app.inventory_reservation
       (id, organization_id, store_id, inventory_item_id, reserved_qty, status, reference_type, reference_id, expires_at)
-      VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 'EXTERNAL_REFERENCE', $6, $7)`,
-      [input.reservationId, input.organizationId, input.storeId, input.inventoryItemId, reservedQty, input.referenceId, input.expiresAt ?? null]);
+      VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 'EXTERNAL_REFERENCE', $6, COALESCE($7, now() + make_interval(mins => $8)))`,
+      [input.reservationId, input.organizationId, input.storeId, input.inventoryItemId, reservedQty, input.referenceId, input.expiresAt ?? null, orderReservationTtlMinutes()]);
   });
 }
 

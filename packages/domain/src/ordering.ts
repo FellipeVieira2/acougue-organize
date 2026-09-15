@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { ApiError } from "./api.ts";
 import { withMembershipTransaction } from "./membership.ts";
 import { parseInteger, positive, priceByGrams, priceByUnits, sumMinor } from "./quantities.ts";
+import { orderReservationTtlMinutes } from "./reservation-policy.ts";
 
 type FulfillmentType = "PICKUP" | "DELIVERY";
 
@@ -128,9 +129,9 @@ export async function createOrderAuthorized(pool: Pool, input: CreateOrderInput)
           AND on_hand_qty - reserved_qty >= $4`, [input.organizationId, input.storeId, line.inventoryItemId, line.reservedQty.toString()]);
       if (reserved.rowCount !== 1) throw new ApiError(409, "CONFLICT", "Insufficient available inventory");
       await client.query(`INSERT INTO app.inventory_reservation
-        (id, organization_id, store_id, inventory_item_id, reserved_qty, status, reference_type, reference_id, order_id, order_item_id)
-        VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 'ORDER_ITEM', $6, $7, $8)`,
-        [randomUUID(), input.organizationId, input.storeId, line.inventoryItemId, line.reservedQty.toString(), item.id, input.orderId, item.id]);
+        (id, organization_id, store_id, inventory_item_id, reserved_qty, status, reference_type, reference_id, order_id, order_item_id, expires_at)
+        VALUES ($1, $2, $3, $4, $5, 'ACTIVE', 'ORDER_ITEM', $6, $7, $8, now() + make_interval(mins => $9))`,
+        [randomUUID(), input.organizationId, input.storeId, line.inventoryItemId, line.reservedQty.toString(), item.id, input.orderId, item.id, orderReservationTtlMinutes()]);
     }
     await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id)
       VALUES ($1, $2, $3, 'ORDER_CREATED', $4::jsonb, $5)`, [randomUUID(), input.organizationId, input.orderId, JSON.stringify({ itemCount: lines.length }), input.actorId]);
@@ -177,6 +178,7 @@ export async function weighOrderItemAuthorized(pool: Pool, input: WeighOrderItem
 
     const reservationResult = await client.query<{ id: string }>(`SELECT id FROM app.inventory_reservation
       WHERE organization_id = $1 AND order_id = $2 AND order_item_id = $3 AND status = 'ACTIVE'
+        AND (expires_at IS NULL OR expires_at > now())
       FOR UPDATE`, [input.organizationId, input.orderId, input.orderItemId]);
     const reservation = reservationResult.rows[0];
     if (!reservation) throw new ApiError(409, "CONFLICT", "Active inventory reservation not found");

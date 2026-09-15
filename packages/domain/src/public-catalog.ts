@@ -6,6 +6,7 @@ import { createTenantTransaction } from "./database.ts";
 import { parseInteger, positive, priceByGrams, priceByUnits, sumMinor } from "./quantities.ts";
 
 import { validateOfferQuantity } from "../../../lib/cart.ts";
+import { orderReservationTtlMinutes } from "./reservation-policy.ts";
 
 type PublicStore = { storeId: string; organizationId: string; storeName: string; storeSlug: string };
 type PublicOffer = {
@@ -206,7 +207,7 @@ export async function createPublicOrder(pool: Pool, slug: string, input: PublicC
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,$14)`, [line.item.id, store.organizationId, orderId, line.item.offerId, line.inventoryItemId, line.productName, line.offerName, line.preparationName, line.sku, line.pricingType, line.unitPriceMinor.toString(), line.requestedQty.toString(), line.estimatedTotalMinor.toString(), line.item.customerNote ?? null]);
       const reserved = await client.query(`UPDATE app.inventory_balance SET reserved_qty=reserved_qty+$4, version=version+1, updated_at=now() WHERE organization_id=$1 AND store_id=$2 AND inventory_item_id=$3 AND on_hand_qty-reserved_qty >= $4`, [store.organizationId, store.storeId, line.inventoryItemId, line.requestedQty.toString()]);
       if (reserved.rowCount !== 1) throw new ApiError(409, "CONFLICT", "Estoque insuficiente para um dos itens.");
-      await client.query(`INSERT INTO app.inventory_reservation (id, organization_id, store_id, inventory_item_id, reserved_qty, status, reference_type, reference_id, order_id, order_item_id) VALUES ($1,$2,$3,$4,$5,'ACTIVE','ORDER_ITEM',$6,$7,$6)`, [randomUUID(), store.organizationId, store.storeId, line.inventoryItemId, line.requestedQty.toString(), line.item.id, orderId]);
+      await client.query(`INSERT INTO app.inventory_reservation (id, organization_id, store_id, inventory_item_id, reserved_qty, status, reference_type, reference_id, order_id, order_item_id, expires_at) VALUES ($1,$2,$3,$4,$5,'ACTIVE','ORDER_ITEM',$6,$7,$6,now() + make_interval(mins => $8))`, [randomUUID(), store.organizationId, store.storeId, line.inventoryItemId, line.requestedQty.toString(), line.item.id, orderId, orderReservationTtlMinutes()]);
     }
     await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload) VALUES ($1,$2,$3,'ORDER_CREATED',$4::jsonb)`, [randomUUID(), store.organizationId, orderId, JSON.stringify({ public: true, itemCount: lines.length })]);
     const created = await client.query<{ publicNumber: string }>(`SELECT public_number::text AS "publicNumber" FROM app.sales_order WHERE organization_id=$1 AND id=$2`, [store.organizationId, orderId]);

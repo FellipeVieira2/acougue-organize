@@ -10,6 +10,8 @@ import { login, logout, register, session, SESSION_SECONDS } from '../../../lib/
 import { database, readBody, requireOrigin, strictBody } from '../../../lib/web.ts';
 import { approvePublicOrderItem, createPublicOrder, getPublicOrder, listPublicCatalog, quotePublicCatalog } from '../../../packages/domain/src/public-catalog.ts';
 import { canTransitionOrder } from '../../../packages/domain/src/orders.ts';
+import { timingSafeEqual } from 'node:crypto';
+import { expireExpiredReservations } from '../../../packages/domain/src/reservation-expiration.ts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +32,18 @@ async function handle(request: NextRequest): Promise<NextResponse> {
     const publicOrderMatch = /^\/api\/public\/stores\/([^/]+)\/orders$/.exec(path);
     const publicOrderLookupMatch = /^\/api\/public\/stores\/([^/]+)\/orders\/([^/]+)$/.exec(path);
     const publicOrderApproveMatch = /^\/api\/public\/stores\/([^/]+)\/orders\/([^/]+)\/approve$/.exec(path);
+    if (path === '/api/internal/jobs/expire-reservations' && (request.method === 'GET' || request.method === 'POST')) {
+      const configuredSecret = process.env.CRON_SECRET;
+      const supplied = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+      const suppliedBytes = Buffer.from(supplied);
+      const configuredBytes = Buffer.from(configuredSecret ?? '');
+      if (!configuredSecret || suppliedBytes.length !== configuredBytes.length || !timingSafeEqual(suppliedBytes, configuredBytes)) {
+        return json({ error: { code: 'UNAUTHORIZED', message: 'Não autorizado.' } }, 401);
+      }
+      const metrics = await expireExpiredReservations(database());
+      console.log(JSON.stringify({ job: 'expire-reservations', ...metrics }));
+      return json(metrics);
+    }
     if (publicCatalogMatch && request.method === 'GET') {
       return json(await listPublicCatalog(database(), decodeURIComponent(publicCatalogMatch[1]!)));
     }
@@ -130,6 +144,7 @@ async function handle(request: NextRequest): Promise<NextResponse> {
           if (!from) throw new ApiError(404, 'NOT_FOUND', 'Pedido não encontrado.');
           if (!canTransitionOrder(from as any, status as any)) throw new ApiError(409, 'CONFLICT', 'Transição de pedido inválida.');
           await client.query('UPDATE app.sales_order SET fulfillment_status=$3, order_status=CASE WHEN $3=\'CONFIRMED\' THEN \'CONFIRMED\' ELSE order_status END, version=version+1, confirmed_at=CASE WHEN $3=\'CONFIRMED\' THEN now() ELSE confirmed_at END, completed_at=CASE WHEN $3=\'COMPLETED\' THEN now() ELSE completed_at END, canceled_at=CASE WHEN $3=\'CANCELED\' THEN now() ELSE canceled_at END, updated_at=now() WHERE organization_id=$1 AND id=$2', [identity.organizationId, orderStatusMatch[1], status]);
+          if (status !== 'RECEIVED') await client.query(`UPDATE app.inventory_reservation SET expires_at=NULL WHERE organization_id=$1 AND order_id=$2 AND status='ACTIVE'`, [identity.organizationId, orderStatusMatch[1]]);
           await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1,$2,$3,$4,$5::jsonb,$6)`, [randomUUID(), identity.organizationId, orderStatusMatch[1], `ORDER_${status}`, JSON.stringify({ from, to: status }), identity.actorId]);
           return { id: orderStatusMatch[1], fulfillmentStatus: status };
         }));
