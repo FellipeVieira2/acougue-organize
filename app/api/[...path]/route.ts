@@ -1,6 +1,6 @@
 import { orderDetails } from "../../../lib/order-details.ts";
 import { listStock, setStock } from '../../../lib/stock.ts';
-import { weighOrderItemAuthorized } from "../../../packages/domain/src/ordering.ts";
+import { cancelOrderAuthorized, completeDeliveryAuthorized, completePickupAuthorized, markOrderReadyAuthorized, weighOrderItemAuthorized } from "../../../packages/domain/src/ordering.ts";
 import { NextRequest, NextResponse } from 'next/server.js';
 import { updateProduct } from '../../../lib/products.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,6 +9,7 @@ import { withMembershipTransaction } from '../../../packages/domain/src/membersh
 import { login, logout, register, session, SESSION_SECONDS } from '../../../lib/auth.ts';
 import { database, readBody, requireOrigin, strictBody } from '../../../lib/web.ts';
 import { approvePublicOrderItem, createPublicOrder, getPublicOrder, listPublicCatalog, quotePublicCatalog } from '../../../packages/domain/src/public-catalog.ts';
+import { canTransitionOrder } from '../../../packages/domain/src/orders.ts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -99,19 +100,38 @@ async function handle(request: NextRequest): Promise<NextResponse> {
         if (typeof body.finalQty !== 'string') throw new ApiError(400, 'VALIDATION_ERROR', 'Informe a quantidade em gramas ou unidades inteiras.');
         return json(await weighOrderItemAuthorized(database(), { organizationId: identity.organizationId, actorId: identity.actorId, orderId: weighMatch[1]!, orderItemId: weighMatch[2]!, finalQty: body.finalQty }));
       }
+      const cancelOrderMatch = /^\/api\/orders\/([^/]+)\/cancel$/.exec(path);
+      if (cancelOrderMatch) {
+        strictBody(body, ['reason']);
+        if (typeof body.reason !== 'string') throw new ApiError(400, 'VALIDATION_ERROR', 'Informe o motivo do cancelamento.');
+        return json(await cancelOrderAuthorized(database(), { organizationId: identity.organizationId, actorId: identity.actorId, orderId: cancelOrderMatch[1]!, reason: body.reason }));
+      }
+      const readyOrderMatch = /^\/api\/orders\/([^/]+)\/ready$/.exec(path);
+      if (readyOrderMatch) {
+        strictBody(body, []);
+        return json(await markOrderReadyAuthorized(database(), { organizationId: identity.organizationId, actorId: identity.actorId, orderId: readyOrderMatch[1]! }));
+      }
+      const completeOrderMatch = /^\/api\/orders\/([^/]+)\/complete$/.exec(path);
+      if (completeOrderMatch) {
+        strictBody(body, ['fulfillmentType']);
+        if (body.fulfillmentType !== 'PICKUP' && body.fulfillmentType !== 'DELIVERY') throw new ApiError(400, 'VALIDATION_ERROR', 'Tipo de atendimento inválido.');
+        const input = { organizationId: identity.organizationId, actorId: identity.actorId, orderId: completeOrderMatch[1]!, fulfillmentType: body.fulfillmentType } as const;
+        return json(await (body.fulfillmentType === 'DELIVERY' ? completeDeliveryAuthorized(database(), input) : completePickupAuthorized(database(), input)));
+      }
       const orderStatusMatch = /^\/api\/orders\/([^/]+)\/status$/.exec(path);
       if (orderStatusMatch && path.startsWith('/api/orders/')) {
         strictBody(body, ['status']);
-        if (body.status !== 'CONFIRMED' && body.status !== 'SEPARATING') throw new ApiError(400, 'VALIDATION_ERROR', 'Status de operação inválido.');
+        const status = typeof body.status === 'string' ? body.status : null;
+        const allowed = ['RECEIVED', 'CONFIRMED', 'SEPARATING', 'WEIGHING', 'WAITING_CUSTOMER_APPROVAL', 'WEIGHT_ADJUSTED', 'READY', 'COMPLETED', 'CANCELED'] as const;
+        if (!status || !allowed.includes(status as (typeof allowed)[number])) throw new ApiError(400, 'VALIDATION_ERROR', 'Status de operação inválido.');
         return json(await withMembershipTransaction(database(), identity.organizationId, identity.actorId, 'OPERATOR', async client => {
           const current = await client.query<{ status: string }>('SELECT fulfillment_status AS status FROM app.sales_order WHERE organization_id=$1 AND id=$2 FOR UPDATE', [identity.organizationId, orderStatusMatch[1]]);
           const from = current.rows[0]?.status;
           if (!from) throw new ApiError(404, 'NOT_FOUND', 'Pedido não encontrado.');
-          const valid = (body.status === 'CONFIRMED' && from === 'RECEIVED') || (body.status === 'SEPARATING' && from === 'CONFIRMED');
-          if (!valid) throw new ApiError(409, 'CONFLICT', 'Transição de pedido inválida.');
-          await client.query('UPDATE app.sales_order SET fulfillment_status=$3, order_status=CASE WHEN $3=\'CONFIRMED\' THEN \'CONFIRMED\' ELSE order_status END, version=version+1, confirmed_at=CASE WHEN $3=\'CONFIRMED\' THEN now() ELSE confirmed_at END, updated_at=now() WHERE organization_id=$1 AND id=$2', [identity.organizationId, orderStatusMatch[1], body.status]);
-          await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1,$2,$3,$4,$5::jsonb,$6)`, [randomUUID(), identity.organizationId, orderStatusMatch[1], `ORDER_${body.status}`, JSON.stringify({ from, to: body.status }), identity.actorId]);
-          return { id: orderStatusMatch[1], fulfillmentStatus: body.status };
+          if (!canTransitionOrder(from as any, status as any)) throw new ApiError(409, 'CONFLICT', 'Transição de pedido inválida.');
+          await client.query('UPDATE app.sales_order SET fulfillment_status=$3, order_status=CASE WHEN $3=\'CONFIRMED\' THEN \'CONFIRMED\' ELSE order_status END, version=version+1, confirmed_at=CASE WHEN $3=\'CONFIRMED\' THEN now() ELSE confirmed_at END, completed_at=CASE WHEN $3=\'COMPLETED\' THEN now() ELSE completed_at END, canceled_at=CASE WHEN $3=\'CANCELED\' THEN now() ELSE canceled_at END, updated_at=now() WHERE organization_id=$1 AND id=$2', [identity.organizationId, orderStatusMatch[1], status]);
+          await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1,$2,$3,$4,$5::jsonb,$6)`, [randomUUID(), identity.organizationId, orderStatusMatch[1], `ORDER_${status}`, JSON.stringify({ from, to: status }), identity.actorId]);
+          return { id: orderStatusMatch[1], fulfillmentStatus: status };
         }));
       }
       if (path === '/api/stock') return json(await setStock(database(),identity,body,requestId));

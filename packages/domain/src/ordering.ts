@@ -207,6 +207,109 @@ export async function weighOrderItemAuthorized(pool: Pool, input: WeighOrderItem
   });
 }
 
+export type CancelOrderInput = {
+  organizationId: string;
+  orderId: string;
+  actorId: string;
+  reason: string;
+};
+
+export async function cancelOrderAuthorized(pool: Pool, input: CancelOrderInput): Promise<{ orderStatus: 'CANCELED'; reason: string }> {
+  uuid(input.organizationId, 'organizationId');
+  uuid(input.orderId, 'orderId');
+  uuid(input.actorId, 'actorId');
+  const reason = text(input.reason, 'reason', 500);
+
+  return withMembershipTransaction(pool, input.organizationId, input.actorId, 'MANAGER', async client => {
+    const order = await client.query<{ id: string; store_id: string; fulfillment_status: string; order_status: string }>(`SELECT id, store_id, order_status, fulfillment_status FROM app.sales_order WHERE organization_id = $1 AND id = $2 FOR UPDATE`, [input.organizationId, input.orderId]);
+    const current = order.rows[0];
+    if (!current) throw new ApiError(404, 'NOT_FOUND', 'Pedido não encontrado.');
+    if (['CANCELED', 'COMPLETED'].includes(current.order_status) || ['CANCELED', 'COMPLETED'].includes(current.fulfillment_status)) {
+      throw new ApiError(409, 'CONFLICT', 'Pedido terminal não pode ser cancelado novamente.');
+    }
+
+    const activeReservations = await client.query<{ id: string; inventory_item_id: string; reserved_qty: string; consumed_qty: string }>(`SELECT id, inventory_item_id, reserved_qty, consumed_qty FROM app.inventory_reservation WHERE organization_id = $1 AND order_id = $2 AND status = 'ACTIVE' FOR UPDATE`, [input.organizationId, input.orderId]);
+    for (const reservation of activeReservations.rows) {
+      const reservedQty = BigInt(reservation.reserved_qty);
+      await client.query(`UPDATE app.inventory_balance SET reserved_qty = reserved_qty - $4, version = version + 1, updated_at = now() WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3 AND reserved_qty >= $4`, [input.organizationId, current.store_id, reservation.inventory_item_id, reservedQty.toString()]);
+      await client.query(`UPDATE app.inventory_reservation SET status = 'RELEASED', released_qty = reserved_qty, released_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, reservation.id]);
+      await client.query(`INSERT INTO app.inventory_movement (id, organization_id, store_id, inventory_item_id, movement_type, quantity_delta, reference_type, reference_id, reason, actor_id) VALUES ($1, $2, $3, $4, 'RETURN', $5, 'ORDER_CANCEL', $6, $7, $8)`, [randomUUID(), input.organizationId, current.store_id, reservation.inventory_item_id, reservedQty.toString(), input.orderId, reason, input.actorId]);
+    }
+
+    const consumedReservations = await client.query<{ id: string; inventory_item_id: string; consumed_qty: string }>(`SELECT id, inventory_item_id, consumed_qty FROM app.inventory_reservation WHERE organization_id = $1 AND order_id = $2 AND status = 'CONSUMED' FOR UPDATE`, [input.organizationId, input.orderId]);
+    for (const reservation of consumedReservations.rows) {
+      const quantity = BigInt(reservation.consumed_qty);
+      await client.query(`UPDATE app.inventory_balance SET on_hand_qty = on_hand_qty + $4, version = version + 1, updated_at = now() WHERE organization_id = $1 AND store_id = $2 AND inventory_item_id = $3`, [input.organizationId, current.store_id, reservation.inventory_item_id, quantity.toString()]);
+      await client.query(`UPDATE app.inventory_reservation SET status = 'RELEASED', released_qty = consumed_qty, released_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, reservation.id]);
+      await client.query(`INSERT INTO app.inventory_movement (id, organization_id, store_id, inventory_item_id, movement_type, quantity_delta, reference_type, reference_id, reason, actor_id) VALUES ($1, $2, $3, $4, 'RETURN', $5, 'ORDER_CANCEL', $6, $7, $8)`, [randomUUID(), input.organizationId, current.store_id, reservation.inventory_item_id, quantity.toString(), input.orderId, reason, input.actorId]);
+    }
+
+    await client.query(`UPDATE app.order_item SET status = 'CANCELED', updated_at = now() WHERE organization_id = $1 AND order_id = $2`, [input.organizationId, input.orderId]);
+    await client.query(`UPDATE app.sales_order SET order_status = 'CANCELED', fulfillment_status = 'CANCELED', version = version + 1, updated_at = now(), canceled_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId]);
+    await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1, $2, $3, 'ORDER_CANCELED', $4::jsonb, $5)`, [randomUUID(), input.organizationId, input.orderId, JSON.stringify({ reason, previousStatus: current.fulfillment_status }), input.actorId]);
+    return { orderStatus: 'CANCELED', reason };
+  });
+}
+
+export type MarkOrderReadyInput = {
+  organizationId: string;
+  orderId: string;
+  actorId: string;
+};
+
+export async function markOrderReadyAuthorized(pool: Pool, input: MarkOrderReadyInput): Promise<{ orderStatus: 'READY' }> {
+  uuid(input.organizationId, 'organizationId');
+  uuid(input.orderId, 'orderId');
+  uuid(input.actorId, 'actorId');
+
+  return withMembershipTransaction(pool, input.organizationId, input.actorId, 'OPERATOR', async client => {
+    const current = await client.query<{ fulfillment_status: string }>(`SELECT fulfillment_status FROM app.sales_order WHERE organization_id = $1 AND id = $2 FOR UPDATE`, [input.organizationId, input.orderId]);
+    const status = current.rows[0]?.fulfillment_status;
+    if (!status) throw new ApiError(404, 'NOT_FOUND', 'Pedido não encontrado.');
+    if (status === 'CANCELED' || status === 'COMPLETED') throw new ApiError(409, 'CONFLICT', 'Pedido terminal não pode ser marcado como pronto.');
+    if (status !== 'WEIGHT_ADJUSTED' && status !== 'WAITING_CUSTOMER_APPROVAL') throw new ApiError(409, 'CONFLICT', 'Pedido não está pronto para a etapa final.');
+    const pending = await client.query<{ pending: string }>(`SELECT count(*)::text AS pending FROM app.order_item WHERE organization_id = $1 AND order_id = $2 AND status NOT IN ('RESOLVED','CANCELED')`, [input.organizationId, input.orderId]);
+    if (pending.rows[0]?.pending !== '0') throw new ApiError(409, 'CONFLICT', 'Ainda existem itens pendentes de pesagem.');
+    await client.query(`UPDATE app.sales_order SET fulfillment_status = 'READY', version = version + 1, updated_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId]);
+    await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1, $2, $3, 'ORDER_READY', $4::jsonb, $5)`, [randomUUID(), input.organizationId, input.orderId, JSON.stringify({ from: status, to: 'READY' }), input.actorId]);
+    return { orderStatus: 'READY' };
+  });
+}
+
+export type CompleteOrderInput = {
+  organizationId: string;
+  orderId: string;
+  actorId: string;
+  fulfillmentType?: 'PICKUP' | 'DELIVERY';
+};
+
+export async function completePickupAuthorized(pool: Pool, input: CompleteOrderInput): Promise<{ orderStatus: 'COMPLETED' }> {
+  return completeOrderAuthorized(pool, { ...input, fulfillmentType: 'PICKUP' });
+}
+
+export async function completeDeliveryAuthorized(pool: Pool, input: CompleteOrderInput): Promise<{ orderStatus: 'COMPLETED' }> {
+  return completeOrderAuthorized(pool, { ...input, fulfillmentType: 'DELIVERY' });
+}
+
+export async function completeOrderAuthorized(pool: Pool, input: CompleteOrderInput): Promise<{ orderStatus: 'COMPLETED' }> {
+  uuid(input.organizationId, 'organizationId');
+  uuid(input.orderId, 'orderId');
+  uuid(input.actorId, 'actorId');
+
+  return withMembershipTransaction(pool, input.organizationId, input.actorId, 'OPERATOR', async client => {
+    const current = await client.query<{ fulfillment_status: string; fulfillment_type: string; order_status: string }>(`SELECT fulfillment_status, fulfillment_type, order_status FROM app.sales_order WHERE organization_id = $1 AND id = $2 FOR UPDATE`, [input.organizationId, input.orderId]);
+    const order = current.rows[0];
+    if (!order) throw new ApiError(404, 'NOT_FOUND', 'Pedido não encontrado.');
+    if (order.order_status === 'CANCELED' || order.order_status === 'COMPLETED') throw new ApiError(409, 'CONFLICT', 'Pedido terminal não pode ser concluído novamente.');
+    if (order.fulfillment_status !== 'READY') throw new ApiError(409, 'CONFLICT', 'Pedido precisa estar pronto antes de concluir.');
+    const fulfillmentType = input.fulfillmentType ?? order.fulfillment_type;
+    if (fulfillmentType === 'DELIVERY' && order.fulfillment_status !== 'READY') throw new ApiError(409, 'CONFLICT', 'Entrega só pode ser concluída quando a logística estiver pronta.');
+    await client.query(`UPDATE app.sales_order SET order_status = 'COMPLETED', fulfillment_status = 'COMPLETED', version = version + 1, updated_at = now(), completed_at = now() WHERE organization_id = $1 AND id = $2`, [input.organizationId, input.orderId]);
+    await client.query(`INSERT INTO app.order_event (id, organization_id, order_id, event_type, payload, actor_id) VALUES ($1, $2, $3, 'ORDER_COMPLETED', $4::jsonb, $5)`, [randomUUID(), input.organizationId, input.orderId, JSON.stringify({ fulfillmentType, completedAt: new Date().toISOString() }), input.actorId]);
+    return { orderStatus: 'COMPLETED' };
+  });
+}
+
 export type ApproveOrderItemInput = {
   organizationId: string;
   orderId: string;

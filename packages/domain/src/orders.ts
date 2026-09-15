@@ -16,6 +16,15 @@ const transitions: Readonly<Record<FulfillmentStatus, readonly FulfillmentStatus
   CANCELED: [],
 };
 
+export function isTerminalStatus(status: FulfillmentStatus): boolean {
+  return status === 'COMPLETED' || status === 'CANCELED';
+}
+
+export function canTransitionOrder(from: FulfillmentStatus, to: FulfillmentStatus): boolean {
+  if (isTerminalStatus(from)) return false;
+  return transitions[from]?.includes(to) === true;
+}
+
 export interface OrderGuards {
   itemsResolved: boolean;
   requiresApproval: boolean;
@@ -29,7 +38,7 @@ export interface OrderGuards {
 
 /** Pure guard only; the application must persist state/history under a version lock. */
 export function transitionOrder(from: FulfillmentStatus, to: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
-  requireRule(transitions[from]?.includes(to) === true, 'INVALID_TRANSITION', 'Esta mudança de etapa não é permitida.');
+  requireRule(canTransitionOrder(from, to), 'INVALID_TRANSITION', 'Esta mudança de etapa não é permitida.');
   nonNegative(guards.capturedMinor);
   nonNegative(guards.refundedMinor);
   requireRule(guards.refundedMinor <= guards.capturedMinor, 'INVALID_PAYMENT', 'O estorno não pode superar o recebimento.');
@@ -49,6 +58,38 @@ export function transitionOrder(from: FulfillmentStatus, to: FulfillmentStatus, 
   if (to === 'CANCELED') requireRule(guards.capturedMinor === guards.refundedMinor,
     'REFUND_REQUIRED', 'Devolva os valores recebidos antes de cancelar.');
   return to;
+}
+
+export function confirmOrder(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'CONFIRMED', guards);
+}
+
+export function startOrderSeparation(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'SEPARATING', guards);
+}
+
+export function startOrderWeighing(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'WEIGHING', guards);
+}
+
+export function requestCustomerApproval(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'WAITING_CUSTOMER_APPROVAL', guards);
+}
+
+export function approveOrderWeight(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'WEIGHT_ADJUSTED', guards);
+}
+
+export function markOrderReady(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'READY', guards);
+}
+
+export function completeOrder(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'COMPLETED', guards);
+}
+
+export function cancelOrder(from: FulfillmentStatus, guards: OrderGuards): FulfillmentStatus {
+  return transitionOrder(from, 'CANCELED', guards);
 }
 
 export interface QuotedLine {

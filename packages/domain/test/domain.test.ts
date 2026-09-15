@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_DB_INTEGER, DomainError, parseInteger, priceByGrams, priceByUnits, sumMinor, allocateMinor, withinWeightPolicy, quoteLines, transitionOrder, refundableMinor, resolveEntitlement, requireCapacity, requireDowngradeCapacity, closeProduction } from '../src/index.ts';
+import { MAX_DB_INTEGER, DomainError, parseInteger, priceByGrams, priceByUnits, sumMinor, allocateMinor, withinWeightPolicy, quoteLines, transitionOrder, canTransitionOrder, refundableMinor, resolveEntitlement, requireCapacity, requireDowngradeCapacity, closeProduction } from '../src/index.ts';
 import type { OrderGuards, FulfillmentStatus } from '../src/index.ts';
 
 function throwsCode(fn: () => unknown, code: string) {
@@ -90,6 +90,11 @@ test('pedido não pula separação/pesagem e não reabre estado terminal', () =>
     }
   }
   assert.equal(transitionOrder('RECEIVED', 'CONFIRMED', readyGuards()), 'CONFIRMED');
+  assert.equal(canTransitionOrder('RECEIVED', 'CONFIRMED'), true);
+  assert.equal(canTransitionOrder('WEIGHT_ADJUSTED', 'READY'), true);
+  assert.equal(canTransitionOrder('READY', 'COMPLETED'), true);
+  assert.equal(canTransitionOrder('COMPLETED', 'CANCELED'), false);
+  assert.equal(canTransitionOrder('RECEIVED', 'READY'), false);
 });
 
 test('aprovação antiga ou peso não resolvido impede liberação', () => {
